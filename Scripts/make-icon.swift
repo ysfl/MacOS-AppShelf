@@ -10,6 +10,7 @@ let canvasSize = NSSize(width: 1024, height: 1024)
 let image = NSImage(size: canvasSize)
 image.lockFocus()
 
+// Draw a simple shelf mark: a blue rounded tile containing a 3 x 3 app grid.
 NSColor.clear.setFill()
 NSRect(origin: .zero, size: canvasSize).fill()
 
@@ -37,6 +38,7 @@ let colors: [NSColor] = [
 ]
 
 var colorIndex = 0
+// Keep the tile geometry explicit so every generated icon size has the same composition.
 for y in positions.reversed() {
     for x in positions {
         let tile = NSBezierPath(

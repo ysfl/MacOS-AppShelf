@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Shared colors for the launcher shell and its controls.
 private enum AppShelfPalette {
     static let sidebar = Color(nsColor: .underPageBackgroundColor)
     static let canvas = Color(nsColor: .windowBackgroundColor)
@@ -11,6 +12,7 @@ private enum AppShelfPalette {
     static let success = Color(red: 0.12, green: 0.60, blue: 0.42)
 }
 
+/// The main window. Sheets and alerts are kept here so child views only emit user intent.
 struct ContentView: View {
     @ObservedObject var store: LauncherStore
 
@@ -21,6 +23,7 @@ struct ContentView: View {
     @State private var isShowingAddSheet = false
     @State private var appToMove: AppItem?
 
+    // Running state is cheap to refresh and should reflect apps launched outside AppShelf.
     private let refreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -95,6 +98,7 @@ struct ContentView: View {
     }
 
     private var mainContent: some View {
+        // The header stays fixed while the grid scrolls, which keeps search and filters visible.
         VStack(alignment: .leading, spacing: 0) {
             header
 
@@ -206,6 +210,7 @@ struct ContentView: View {
     }
 
     private var appGrid: some View {
+        // Adaptive columns use the available window width without changing card dimensions.
         LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 172, maximum: 230), spacing: 14)],
             alignment: .leading,
@@ -293,6 +298,8 @@ struct ContentView: View {
     }
 
     private func chooseApps() {
+        // The system picker is opened only after an explicit Add App action and never scans
+        // arbitrary folders on its own.
         let panel = NSOpenPanel()
         panel.title = "添加应用"
         panel.message = "选择一个或多个 .app 文件"
@@ -308,6 +315,7 @@ struct ContentView: View {
     }
 }
 
+/// Navigation for built-in views, user groups, and the small utility list.
 struct SidebarView: View {
     @ObservedObject var store: LauncherStore
     let onNewGroup: () -> Void
@@ -443,6 +451,7 @@ struct SidebarView: View {
     }
 }
 
+/// Small all-caps labels separate the sidebar's navigation sections.
 private struct SidebarSectionLabel: View {
     let title: String
 
@@ -460,6 +469,7 @@ private struct SidebarSectionLabel: View {
     }
 }
 
+/// A selectable sidebar row with a count that stays aligned as names change.
 private struct SidebarRow: View {
     let title: String
     let symbol: String
@@ -502,6 +512,7 @@ private struct SidebarRow: View {
     }
 }
 
+/// A sidebar shortcut that delegates launching to the store owner.
 private struct ToolRow: View {
     let tool: QuickTool
     let action: () -> Void
@@ -530,6 +541,7 @@ private struct ToolRow: View {
     }
 }
 
+/// A fixed-size app tile. Opening is the primary action; less common actions live in its menu.
 private struct AppCard: View {
     let app: AppItem
     let currentGroupID: UUID?
@@ -625,6 +637,7 @@ private struct AppCard: View {
     }
 }
 
+/// Resolve the icon from the bundle path so third-party apps use their own artwork.
 private struct AppIconView: View {
     let path: String
 
@@ -637,6 +650,7 @@ private struct AppIconView: View {
     }
 }
 
+/// A larger shortcut tile shown above the full app grid.
 private struct QuickToolTile: View {
     let tool: QuickTool
     let action: () -> Void
@@ -677,6 +691,7 @@ private struct QuickToolTile: View {
     }
 }
 
+/// Placeholder shown while the file-system scan is in progress.
 private struct LoadingState: View {
     var body: some View {
         VStack(spacing: 12) {
@@ -690,6 +705,7 @@ private struct LoadingState: View {
     }
 }
 
+/// Shared empty state for an empty group and an unsuccessful search.
 private struct EmptyState: View {
     let query: String
     let selection: ShelfSelection
@@ -732,6 +748,7 @@ private struct EmptyState: View {
     }
 }
 
+/// Create or edit one group without exposing persistence details to the form.
 struct GroupEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -822,6 +839,7 @@ struct GroupEditorSheet: View {
     }
 }
 
+/// Review selected app bundles and choose their destination group.
 struct AddAppsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -897,6 +915,7 @@ struct AddAppsSheet: View {
     }
 }
 
+/// Choose another group for an existing app card.
 struct MoveAppSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -955,6 +974,7 @@ struct MoveAppSheet: View {
 }
 
 private extension Color {
+    /// Convert the system color picker value to the hex representation persisted by AppGroup.
     var appShelfHex: String {
         let nsColor = NSColor(self).usingColorSpace(.deviceRGB) ?? NSColor.gray
         let red = max(0, min(255, Int(round(nsColor.redComponent * 255))))

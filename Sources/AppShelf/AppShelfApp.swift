@@ -1,5 +1,7 @@
 import SwiftUI
 
+/// Application entry point. The store is shared by the window so scanning and edits
+/// update the sidebar and the app grid from the same source of truth.
 @main
 struct AppShelfApp: App {
     @StateObject private var store = LauncherStore()
@@ -8,6 +10,7 @@ struct AppShelfApp: App {
         WindowGroup {
             ContentView(store: store)
         }
+        // Keep the window large enough for the sidebar and the adaptive app grid.
         .defaultSize(width: 1100, height: 720)
         .windowResizability(.contentMinSize)
         .commands {

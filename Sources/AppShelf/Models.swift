@@ -3,6 +3,8 @@ import Combine
 import Foundation
 import SwiftUI
 
+/// A local snapshot of an application bundle shown in the launcher.
+/// The normalized bundle path is the stable identity used by groups and SwiftUI.
 struct AppItem: Identifiable, Hashable {
     let id: String
     let name: String
@@ -30,6 +32,8 @@ struct AppItem: Identifiable, Hashable {
     }
 }
 
+/// A user-defined collection of application bundle paths.
+/// Only paths are persisted; the bundle metadata is rebuilt during a scan.
 struct AppGroup: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String
@@ -50,6 +54,7 @@ struct AppGroup: Identifiable, Codable, Hashable {
     }
 }
 
+/// The built-in views and user group that can be selected in the sidebar.
 enum ShelfSelection: Hashable {
     case all
     case running
@@ -57,6 +62,7 @@ enum ShelfSelection: Hashable {
     case group(UUID)
 }
 
+/// Apple utilities that can be launched even when they are not in the app grid.
 enum QuickTool: String, CaseIterable, Identifiable {
     case calculator
     case terminal
@@ -126,6 +132,7 @@ enum QuickTool: String, CaseIterable, Identifiable {
 }
 
 extension Color {
+    /// Decode the six- or eight-digit hex strings used by persisted group colors.
     init(hex: String) {
         let sanitized = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         var value: UInt64 = 0
@@ -154,9 +161,13 @@ extension Color {
     }
 }
 
+/// Finds launchable app bundles without modifying them.
+/// System background agents are omitted from the automatic scan to keep the list useful.
 enum AppDiscoveryService {
     private static let searchRoots: [URL] = {
         let home = FileManager.default.homeDirectoryForCurrentUser
+        // These are the user-visible application locations. CoreServices is intentionally excluded:
+        // it contains many helper processes that should not appear in a launcher.
         return [
             URL(fileURLWithPath: "/Applications"),
             home.appendingPathComponent("Applications", isDirectory: true),
@@ -176,6 +187,8 @@ enum AppDiscoveryService {
             }
         }
 
+        // A manually selected path is an explicit user choice, so keep it even when its
+        // bundle declares itself as a background or menu-bar app.
         for path in additionalPaths {
             let url = URL(fileURLWithPath: path)
             if url.pathExtension.caseInsensitiveCompare("app") == .orderedSame,
@@ -211,6 +224,7 @@ enum AppDiscoveryService {
         for case let url as URL in enumerator {
             guard url.pathExtension.caseInsensitiveCompare("app") == .orderedSame else { continue }
             results.append(url)
+            // An app bundle is a package. Do not descend into its embedded helper bundles.
             enumerator.skipDescendants()
         }
         return results
@@ -253,6 +267,8 @@ enum AppDiscoveryService {
             || normalizedIdentifier.contains("vscode")
             || normalizedIdentifier.contains("visualstudio")
 
+        // Classification is deliberately keyword-based and conservative. Users can change
+        // group membership, so a wrong initial category does not change app behavior.
         if isCodeEditor || containsAny(text, ["xcode", "android studio", "hbuilder", "dbeaver", "mqtt", "redis", "sequel", "fork", "docker", "terminal", "termius", "transmit", "postman", "charles", "reqable"]) {
             return "开发"
         }
@@ -276,6 +292,7 @@ enum AppDiscoveryService {
     }
 }
 
+/// Owns the discovered app snapshots and the user-editable group state for the window.
 @MainActor
 final class LauncherStore: ObservableObject {
     @Published private(set) var apps: [AppItem] = []
@@ -320,6 +337,7 @@ final class LauncherStore: ObservableObject {
 
     var filteredApps: [AppItem] {
         var result: [AppItem]
+        // Apply the sidebar selection first, then the text and running-state filters.
         switch selection {
         case .all:
             result = apps
@@ -350,6 +368,7 @@ final class LauncherStore: ObservableObject {
         }
     }
 
+    /// Return the sidebar count without applying the search field.
     func count(for selection: ShelfSelection) -> Int {
         switch selection {
         case .all: return apps.count
@@ -363,12 +382,15 @@ final class LauncherStore: ObservableObject {
         }
     }
 
+    /// Re-scan bundle locations and then merge the current running state.
     func reload() {
         isLoading = true
+        // Saved paths are passed back into discovery so manually added apps survive a refresh.
         let savedPaths = groups.flatMap(\.appPaths)
         var discovered = AppDiscoveryService.discover(additionalPaths: savedPaths)
 
         if !loadedPersistedState {
+            // Bootstrap defaults only once. Existing UserDefaults must remain user-owned.
             groups = Self.defaultGroups()
             assignInitialGroups(for: discovered)
             loadedPersistedState = true
@@ -387,6 +409,7 @@ final class LauncherStore: ObservableObject {
         isLoading = false
     }
 
+    /// Refresh only process state so a five-second timer does not repeatedly walk the file system.
     func refreshRunningState() {
         let runningPaths = runningApplicationPaths()
         apps = apps.map { app in
@@ -397,6 +420,7 @@ final class LauncherStore: ObservableObject {
         lastUpdated = Date()
     }
 
+    /// Ask Launch Services to open a discovered bundle.
     @discardableResult
     func launch(_ app: AppItem) -> Bool {
         let success = NSWorkspace.shared.open(URL(fileURLWithPath: app.path))
@@ -408,8 +432,11 @@ final class LauncherStore: ObservableObject {
         return success
     }
 
+    /// Launch a built-in utility by identifier, with a path fallback for system apps.
     @discardableResult
     func launch(_ tool: QuickTool) -> Bool {
+        // Bundle identifiers handle localized app names. The known paths cover system layouts
+        // where Launch Services cannot resolve the identifier yet.
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: tool.bundleIdentifier) {
             let success = NSWorkspace.shared.open(url)
             if !success { errorMessage = "无法打开“\(tool.title)”" }
@@ -426,10 +453,12 @@ final class LauncherStore: ObservableObject {
         return false
     }
 
+    /// Reveal the bundle in Finder without changing its location.
     func openInFinder(_ app: AppItem) {
         NSWorkspace.shared.selectFile(app.path, inFileViewerRootedAtPath: "")
     }
 
+    /// Append a new group and select it so the user can add apps immediately.
     func createGroup(name: String, symbol: String, colorHex: String) {
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedName.isEmpty else { return }
@@ -439,6 +468,7 @@ final class LauncherStore: ObservableObject {
         persistState()
     }
 
+    /// Update group presentation while preserving its app paths.
     func renameGroup(id: UUID, name: String, symbol: String, colorHex: String) {
         guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -449,6 +479,7 @@ final class LauncherStore: ObservableObject {
         persistState()
     }
 
+    /// Delete only the grouping metadata; application bundles remain untouched.
     func deleteGroup(id: UUID) {
         guard groups.count > 1, let index = groups.firstIndex(where: { $0.id == id }) else { return }
         groups.remove(at: index)
@@ -456,6 +487,7 @@ final class LauncherStore: ObservableObject {
         persistState()
     }
 
+    /// Import selected bundles and attach their normalized paths to one group.
     func addApps(_ urls: [URL], to groupID: UUID) {
         guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
 
@@ -473,6 +505,7 @@ final class LauncherStore: ObservableObject {
         persistState()
     }
 
+    /// Add an existing card to another group without removing its current membership.
     func addApp(_ app: AppItem, to groupID: UUID) {
         guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
         if !groups[groupIndex].appPaths.contains(where: { normalizePath($0) == app.path }) {
@@ -481,12 +514,14 @@ final class LauncherStore: ObservableObject {
         }
     }
 
+    /// Remove a path from one group; the app remains available in All Apps.
     func removeApp(_ app: AppItem, from groupID: UUID) {
         guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
         groups[groupIndex].appPaths.removeAll { normalizePath($0) == app.path }
         persistState()
     }
 
+    /// Restore groups from the current user's defaults, falling back to the built-in set.
     private func loadState() {
         guard let data = UserDefaults.standard.data(forKey: stateKey),
               let saved = try? JSONDecoder().decode([AppGroup].self, from: data),
@@ -498,12 +533,14 @@ final class LauncherStore: ObservableObject {
         loadedPersistedState = true
     }
 
+    /// Encode only the small, user-editable group model; bundle metadata is never persisted.
     private func persistState() {
         guard let data = try? JSONEncoder().encode(groups) else { return }
         UserDefaults.standard.set(data, forKey: stateKey)
     }
 
     private func assignInitialGroups(for discovered: [AppItem]) {
+        // This is a one-time convenience pass, not a permanent categorization rule.
         let commonNames = ["safari", "google chrome", "visual studio code", "xcode", "terminal", "chatgpt", "obsidian"]
 
         for app in discovered {
@@ -523,6 +560,7 @@ final class LauncherStore: ObservableObject {
     }
 
     private func runningApplicationPaths() -> Set<String> {
+        // NSWorkspace gives us the current launch state without polling individual processes.
         Set(NSWorkspace.shared.runningApplications.compactMap { application in
             application.bundleURL?.standardizedFileURL.path
         })
@@ -532,6 +570,7 @@ final class LauncherStore: ObservableObject {
         URL(fileURLWithPath: path).standardizedFileURL.path
     }
 
+    /// Starter groups shown on a first launch.
     private static func defaultGroups() -> [AppGroup] {
         [
             AppGroup(name: "常用", symbol: "star.fill", colorHex: "#F59E0B"),

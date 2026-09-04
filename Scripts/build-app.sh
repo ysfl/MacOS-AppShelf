@@ -6,6 +6,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG="${1:-release}"
 
 cd "$PROJECT_DIR"
+# SwiftPM writes build products to .build; the final bundle is assembled below.
 swift build -c "$CONFIG" --product AppShelf
 
 BIN_PATH="$(swift build -c "$CONFIG" --show-bin-path)/AppShelf"
@@ -13,6 +14,7 @@ APP_PATH="$PROJECT_DIR/dist/AppShelf.app"
 ICON_WORK="$(mktemp -d)"
 trap 'rm -rf "$ICON_WORK"' EXIT
 
+# Recreate the bundle so stale resources from an earlier build cannot leak into a release.
 rm -rf "$APP_PATH"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$BIN_PATH" "$APP_PATH/Contents/MacOS/AppShelf"
@@ -21,6 +23,7 @@ cp "$PROJECT_DIR/Info.plist" "$APP_PATH/Contents/Info.plist"
 ICON_MASTER="$ICON_WORK/icon_1024x1024.png"
 ICON_SET="$ICON_WORK/AppIcon.iconset"
 mkdir -p "$ICON_SET"
+# Generate one vector-like raster master, then let sips create Apple's required icon sizes.
 swift "$PROJECT_DIR/Scripts/make-icon.swift" "$ICON_MASTER"
 
 for specification in \

@@ -14,9 +14,11 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$PROJECT_DIR"
+# Always package the current source tree instead of relying on a previously built app.
 "$SCRIPT_DIR/build-app.sh"
 
 mkdir -p "$RELEASE_DIR"
+# The Applications symlink makes the DMG usable as a drag-to-install window.
 /usr/bin/ditto "$PROJECT_DIR/dist/AppShelf.app" "$STAGE_DIR/应用架.app"
 cp "$PROJECT_DIR/README.md" "$STAGE_DIR/使用说明.md"
 ln -s /Applications "$STAGE_DIR/Applications"
