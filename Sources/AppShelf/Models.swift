@@ -1,0 +1,545 @@
+import AppKit
+import Combine
+import Foundation
+import SwiftUI
+
+struct AppItem: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let path: String
+    let bundleIdentifier: String?
+    let category: String
+    var isRunning: Bool
+
+    init(name: String, path: String, bundleIdentifier: String?, category: String, isRunning: Bool = false) {
+        let normalizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        self.id = normalizedPath
+        self.name = name
+        self.path = normalizedPath
+        self.bundleIdentifier = bundleIdentifier
+        self.category = category
+        self.isRunning = isRunning
+    }
+
+    static func == (lhs: AppItem, rhs: AppItem) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+struct AppGroup: Identifiable, Codable, Hashable {
+    let id: UUID
+    var name: String
+    var symbol: String
+    var colorHex: String
+    var appPaths: [String]
+
+    var color: Color {
+        Color(hex: colorHex)
+    }
+
+    init(id: UUID = UUID(), name: String, symbol: String, colorHex: String, appPaths: [String] = []) {
+        self.id = id
+        self.name = name
+        self.symbol = symbol
+        self.colorHex = colorHex
+        self.appPaths = appPaths
+    }
+}
+
+enum ShelfSelection: Hashable {
+    case all
+    case running
+    case ungrouped
+    case group(UUID)
+}
+
+enum QuickTool: String, CaseIterable, Identifiable {
+    case calculator
+    case terminal
+    case activityMonitor
+    case screenshot
+    case systemSettings
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .calculator: return "计算器"
+        case .terminal: return "终端"
+        case .activityMonitor: return "活动监视器"
+        case .screenshot: return "截图"
+        case .systemSettings: return "系统设置"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .calculator: return "plus.forwardslash.minus"
+        case .terminal: return "apple.terminal"
+        case .activityMonitor: return "waveform.path.ecg"
+        case .screenshot: return "rectangle.dashed.and.paperclip"
+        case .systemSettings: return "gearshape"
+        }
+    }
+
+    var bundleIdentifier: String {
+        switch self {
+        case .calculator: return "com.apple.calculator"
+        case .terminal: return "com.apple.Terminal"
+        case .activityMonitor: return "com.apple.ActivityMonitor"
+        case .screenshot: return "com.apple.screenshot"
+        case .systemSettings: return "com.apple.systempreferences"
+        }
+    }
+
+    var fallbackApplicationName: String {
+        switch self {
+        case .calculator: return "Calculator"
+        case .terminal: return "Terminal"
+        case .activityMonitor: return "Activity Monitor"
+        case .screenshot: return "Screenshot"
+        case .systemSettings: return "System Settings"
+        }
+    }
+
+    var fallbackPaths: [String] {
+        switch self {
+        case .calculator:
+            return ["/System/Applications/Calculator.app"]
+        case .terminal:
+            return ["/System/Applications/Utilities/Terminal.app"]
+        case .activityMonitor:
+            return ["/System/Applications/Utilities/Activity Monitor.app"]
+        case .screenshot:
+            return [
+                "/System/Applications/Utilities/Screenshot.app",
+                "/System/Applications/Screenshot.app"
+            ]
+        case .systemSettings:
+            return ["/System/Applications/System Settings.app"]
+        }
+    }
+}
+
+extension Color {
+    init(hex: String) {
+        let sanitized = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var value: UInt64 = 0
+        Scanner(string: sanitized).scanHexInt64(&value)
+
+        let red: Double
+        let green: Double
+        let blue: Double
+
+        switch sanitized.count {
+        case 6:
+            red = Double((value >> 16) & 0xFF) / 255
+            green = Double((value >> 8) & 0xFF) / 255
+            blue = Double(value & 0xFF) / 255
+        case 8:
+            red = Double((value >> 24) & 0xFF) / 255
+            green = Double((value >> 16) & 0xFF) / 255
+            blue = Double((value >> 8) & 0xFF) / 255
+        default:
+            red = 0.35
+            green = 0.40
+            blue = 0.48
+        }
+
+        self.init(red: red, green: green, blue: blue)
+    }
+}
+
+enum AppDiscoveryService {
+    private static let searchRoots: [URL] = {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [
+            URL(fileURLWithPath: "/Applications"),
+            home.appendingPathComponent("Applications", isDirectory: true),
+            URL(fileURLWithPath: "/System/Applications")
+        ]
+    }()
+
+    static func discover(additionalPaths: [String] = []) -> [AppItem] {
+        var items: [AppItem] = []
+        var seen = Set<String>()
+
+        for root in searchRoots {
+            for url in appURLs(in: root) {
+                if let item = makeItem(url: url, seen: &seen, allowsBackgroundApp: false) {
+                    items.append(item)
+                }
+            }
+        }
+
+        for path in additionalPaths {
+            let url = URL(fileURLWithPath: path)
+            if url.pathExtension.caseInsensitiveCompare("app") == .orderedSame,
+               FileManager.default.fileExists(atPath: url.path),
+               let item = makeItem(url: url, seen: &seen, allowsBackgroundApp: true) {
+                items.append(item)
+            }
+        }
+
+        return items.sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+
+    static func item(for url: URL) -> AppItem? {
+        var seen = Set<String>()
+        return makeItem(url: url, seen: &seen, allowsBackgroundApp: true)
+    }
+
+    private static func appURLs(in root: URL) -> [URL] {
+        guard FileManager.default.fileExists(atPath: root.path) else { return [] }
+
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var results: [URL] = []
+        for case let url as URL in enumerator {
+            guard url.pathExtension.caseInsensitiveCompare("app") == .orderedSame else { continue }
+            results.append(url)
+            enumerator.skipDescendants()
+        }
+        return results
+    }
+
+    private static func makeItem(url: URL, seen: inout Set<String>, allowsBackgroundApp: Bool) -> AppItem? {
+        let normalized = url.standardizedFileURL
+        guard normalized.pathExtension.caseInsensitiveCompare("app") == .orderedSame,
+              FileManager.default.fileExists(atPath: normalized.path) else {
+            return nil
+        }
+
+        let bundle = Bundle(url: normalized)
+        let displayName = (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String)
+            ?? normalized.deletingPathExtension().lastPathComponent
+        let bundleIdentifier = bundle?.bundleIdentifier
+        let isBackgroundOnly = bundle?.object(forInfoDictionaryKey: "LSBackgroundOnly") as? Bool ?? false
+        let isUIElement = bundle?.object(forInfoDictionaryKey: "LSUIElement") as? Bool ?? false
+        guard allowsBackgroundApp || (!isBackgroundOnly && !isUIElement),
+              seen.insert(normalized.path).inserted else { return nil }
+        let category = category(for: displayName, bundleIdentifier: bundleIdentifier)
+
+        return AppItem(
+            name: displayName,
+            path: normalized.path,
+            bundleIdentifier: bundleIdentifier,
+            category: category
+        )
+    }
+
+    private static func category(for name: String, bundleIdentifier: String?) -> String {
+        let normalizedName = name.lowercased()
+        let normalizedIdentifier = (bundleIdentifier ?? "").lowercased()
+        let text = "\(normalizedName) \(normalizedIdentifier)"
+        let isCodeEditor = normalizedName == "code"
+            || normalizedName.contains("visual studio code")
+            || normalizedName.contains("codex")
+            || normalizedName.contains("claude code")
+            || normalizedIdentifier.contains("vscode")
+            || normalizedIdentifier.contains("visualstudio")
+
+        if isCodeEditor || containsAny(text, ["xcode", "android studio", "hbuilder", "dbeaver", "mqtt", "redis", "sequel", "fork", "docker", "terminal", "termius", "transmit", "postman", "charles", "reqable"]) {
+            return "开发"
+        }
+        if containsAny(text, ["wechat", "qq", "telegram", "discord", "dingtalk", "lark", "slack", "meeting", "teams", "chatgpt", "claude", "doubao", "qianwen", "workbuddy"]) {
+            return "沟通"
+        }
+        if containsAny(text, ["photoshop", "illustrator", "figma", "sketch", "keynote", "powerpoint", "premiere", "after effects", "pixelmator"]) {
+            return "创作"
+        }
+        if containsAny(text, ["safari", "chrome", "firefox", "arc", "edge", "browser", "obsidian", "notion", "word", "excel", "numbers", "pages", "quark", "baidu", "netdisk"]) {
+            return "日常"
+        }
+        if containsAny(text, ["calculator", "activity monitor", "screenshot", "system preferences", "system settings", "disk utility", "cleanmymac", "keka", "archive", "battery", "clash", "wireguard", "sunlogin", "utilities"]) {
+            return "工具"
+        }
+        return "其他"
+    }
+
+    private static func containsAny(_ text: String, _ values: [String]) -> Bool {
+        values.contains { text.contains($0) }
+    }
+}
+
+@MainActor
+final class LauncherStore: ObservableObject {
+    @Published private(set) var apps: [AppItem] = []
+    @Published private(set) var groups: [AppGroup] = []
+    @Published var selection: ShelfSelection = .all
+    @Published var query = ""
+    @Published var runningOnly = false
+    @Published private(set) var isLoading = true
+    @Published private(set) var lastUpdated = Date()
+    @Published var errorMessage: String?
+
+    private let stateKey = "AppShelf.state.v2"
+    private var loadedPersistedState = false
+
+    init() {
+        loadState()
+        reload()
+    }
+
+    var selectedGroup: AppGroup? {
+        guard case let .group(id) = selection else { return nil }
+        return groups.first { $0.id == id }
+    }
+
+    var selectedTitle: String {
+        switch selection {
+        case .all: return "全部应用"
+        case .running: return "正在运行"
+        case .ungrouped: return "未分组"
+        case .group(let id): return groups.first { $0.id == id }?.name ?? "分组"
+        }
+    }
+
+    var selectedSymbol: String {
+        switch selection {
+        case .all: return "square.grid.2x2.fill"
+        case .running: return "bolt.fill"
+        case .ungrouped: return "tray"
+        case .group(let id): return groups.first { $0.id == id }?.symbol ?? "folder"
+        }
+    }
+
+    var filteredApps: [AppItem] {
+        var result: [AppItem]
+        switch selection {
+        case .all:
+            result = apps
+        case .running:
+            result = apps.filter(\.isRunning)
+        case .ungrouped:
+            let groupedPaths = Set(groups.flatMap(\.appPaths).map(normalizePath))
+            result = apps.filter { !groupedPaths.contains($0.path) }
+        case .group(let id):
+            let paths = Set(groups.first { $0.id == id }?.appPaths.map(normalizePath) ?? [])
+            result = apps.filter { paths.contains($0.path) }
+        }
+
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedQuery.isEmpty {
+            result = result.filter { app in
+                app.name.localizedCaseInsensitiveContains(trimmedQuery)
+                    || app.category.localizedCaseInsensitiveContains(trimmedQuery)
+            }
+        }
+        if runningOnly && selection != .running {
+            result = result.filter(\.isRunning)
+        }
+
+        return result.sorted { lhs, rhs in
+            if lhs.isRunning != rhs.isRunning { return lhs.isRunning }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    func count(for selection: ShelfSelection) -> Int {
+        switch selection {
+        case .all: return apps.count
+        case .running: return apps.filter(\.isRunning).count
+        case .ungrouped:
+            let groupedPaths = Set(groups.flatMap(\.appPaths).map(normalizePath))
+            return apps.filter { !groupedPaths.contains($0.path) }.count
+        case .group(let id):
+            let paths = Set(groups.first { $0.id == id }?.appPaths.map(normalizePath) ?? [])
+            return apps.filter { paths.contains($0.path) }.count
+        }
+    }
+
+    func reload() {
+        isLoading = true
+        let savedPaths = groups.flatMap(\.appPaths)
+        var discovered = AppDiscoveryService.discover(additionalPaths: savedPaths)
+
+        if !loadedPersistedState {
+            groups = Self.defaultGroups()
+            assignInitialGroups(for: discovered)
+            loadedPersistedState = true
+            persistState()
+        }
+
+        let runningPaths = runningApplicationPaths()
+        discovered = discovered.map { app in
+            var updated = app
+            updated.isRunning = runningPaths.contains(app.path)
+            return updated
+        }
+
+        apps = discovered
+        lastUpdated = Date()
+        isLoading = false
+    }
+
+    func refreshRunningState() {
+        let runningPaths = runningApplicationPaths()
+        apps = apps.map { app in
+            var updated = app
+            updated.isRunning = runningPaths.contains(app.path)
+            return updated
+        }
+        lastUpdated = Date()
+    }
+
+    @discardableResult
+    func launch(_ app: AppItem) -> Bool {
+        let success = NSWorkspace.shared.open(URL(fileURLWithPath: app.path))
+        if !success {
+            errorMessage = "无法打开“\(app.name)”"
+        } else {
+            refreshRunningState()
+        }
+        return success
+    }
+
+    @discardableResult
+    func launch(_ tool: QuickTool) -> Bool {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: tool.bundleIdentifier) {
+            let success = NSWorkspace.shared.open(url)
+            if !success { errorMessage = "无法打开“\(tool.title)”" }
+            return success
+        }
+
+        for path in tool.fallbackPaths where FileManager.default.fileExists(atPath: path) {
+            let success = NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            if !success { errorMessage = "无法打开“\(tool.title)”" }
+            return success
+        }
+
+        errorMessage = "找不到“\(tool.title)”"
+        return false
+    }
+
+    func openInFinder(_ app: AppItem) {
+        NSWorkspace.shared.selectFile(app.path, inFileViewerRootedAtPath: "")
+    }
+
+    func createGroup(name: String, symbol: String, colorHex: String) {
+        let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedName.isEmpty else { return }
+        let group = AppGroup(name: cleanedName, symbol: symbol, colorHex: colorHex)
+        groups.append(group)
+        selection = .group(group.id)
+        persistState()
+    }
+
+    func renameGroup(id: UUID, name: String, symbol: String, colorHex: String) {
+        guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
+        let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedName.isEmpty else { return }
+        groups[index].name = cleanedName
+        groups[index].symbol = symbol
+        groups[index].colorHex = colorHex
+        persistState()
+    }
+
+    func deleteGroup(id: UUID) {
+        guard groups.count > 1, let index = groups.firstIndex(where: { $0.id == id }) else { return }
+        groups.remove(at: index)
+        if selection == .group(id) { selection = .all }
+        persistState()
+    }
+
+    func addApps(_ urls: [URL], to groupID: UUID) {
+        guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
+
+        for url in urls {
+            guard let item = AppDiscoveryService.item(for: url) else { continue }
+            if !apps.contains(where: { $0.path == item.path }) {
+                apps.append(item)
+            }
+            if !groups[groupIndex].appPaths.contains(where: { normalizePath($0) == item.path }) {
+                groups[groupIndex].appPaths.append(item.path)
+            }
+        }
+
+        apps.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        persistState()
+    }
+
+    func addApp(_ app: AppItem, to groupID: UUID) {
+        guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        if !groups[groupIndex].appPaths.contains(where: { normalizePath($0) == app.path }) {
+            groups[groupIndex].appPaths.append(app.path)
+            persistState()
+        }
+    }
+
+    func removeApp(_ app: AppItem, from groupID: UUID) {
+        guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        groups[groupIndex].appPaths.removeAll { normalizePath($0) == app.path }
+        persistState()
+    }
+
+    private func loadState() {
+        guard let data = UserDefaults.standard.data(forKey: stateKey),
+              let saved = try? JSONDecoder().decode([AppGroup].self, from: data),
+              !saved.isEmpty else {
+            groups = Self.defaultGroups()
+            return
+        }
+        groups = saved
+        loadedPersistedState = true
+    }
+
+    private func persistState() {
+        guard let data = try? JSONEncoder().encode(groups) else { return }
+        UserDefaults.standard.set(data, forKey: stateKey)
+    }
+
+    private func assignInitialGroups(for discovered: [AppItem]) {
+        let commonNames = ["safari", "google chrome", "visual studio code", "xcode", "terminal", "chatgpt", "obsidian"]
+
+        for app in discovered {
+            let targetName: String?
+            if commonNames.contains(where: { app.name.localizedCaseInsensitiveCompare($0) == .orderedSame }) {
+                targetName = "常用"
+            } else if ["开发", "沟通", "创作", "日常", "工具"].contains(app.category) {
+                targetName = app.category
+            } else {
+                targetName = nil
+            }
+
+            guard let targetName,
+                  let index = groups.firstIndex(where: { $0.name == targetName }) else { continue }
+            groups[index].appPaths.append(app.path)
+        }
+    }
+
+    private func runningApplicationPaths() -> Set<String> {
+        Set(NSWorkspace.shared.runningApplications.compactMap { application in
+            application.bundleURL?.standardizedFileURL.path
+        })
+    }
+
+    private func normalizePath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    private static func defaultGroups() -> [AppGroup] {
+        [
+            AppGroup(name: "常用", symbol: "star.fill", colorHex: "#F59E0B"),
+            AppGroup(name: "开发", symbol: "hammer.fill", colorHex: "#2F80ED"),
+            AppGroup(name: "沟通", symbol: "bubble.left.and.bubble.right.fill", colorHex: "#16A085"),
+            AppGroup(name: "创作", symbol: "wand.and.stars", colorHex: "#D14D72"),
+            AppGroup(name: "日常", symbol: "house.fill", colorHex: "#7C5CFC"),
+            AppGroup(name: "工具", symbol: "wrench.and.screwdriver.fill", colorHex: "#64748B")
+        ]
+    }
+}
