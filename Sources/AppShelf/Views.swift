@@ -220,9 +220,9 @@ struct ContentView: View {
     private var appGrid: some View {
         // Adaptive columns use the available window width without changing card dimensions.
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 152, maximum: 210), spacing: 12)],
+            columns: [GridItem(.adaptive(minimum: 196, maximum: 260), spacing: 10)],
             alignment: .leading,
-            spacing: 12
+            spacing: 10
         ) {
             ForEach(store.filteredApps) { app in
                     AppCard(
@@ -336,7 +336,7 @@ struct ContentView: View {
     }
 
     private func openSystemSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        SettingsWindowController.shared.showWindow()
     }
 }
 
@@ -539,37 +539,43 @@ private struct SidebarRow: View {
                     .frame(width: 18)
 
                 Text(title)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
-                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .font(.system(size: 13, weight: isHighlighted ? .semibold : .medium))
+                    .foregroundStyle(isHighlighted ? .primary : .secondary)
                     .lineLimit(1)
 
                 Spacer(minLength: 4)
 
                 Text("\(count)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(isSelected ? .secondary : .tertiary)
+                    .foregroundStyle(isHighlighted ? .primary : .tertiary)
             }
             .padding(.horizontal, 10)
             .frame(height: 34)
-            .background {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(backgroundOpacity == 0 ? Color.clear : Color.white.opacity(backgroundOpacity))
-                    .shadow(color: .black.opacity(isSelected && !isDropTarget ? 0.04 : 0), radius: 2, y: 1)
-                    .overlay {
-                        if isDropTarget {
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(AppShelfPalette.accent, lineWidth: 2)
-                        }
-                    }
-            }
+            .background { rowBackground }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
-    private var backgroundOpacity: Double {
-        if isDropTarget { return 0.9 }
-        return isSelected ? 0.78 : 0
+    private var isHighlighted: Bool { isSelected || isDropTarget }
+
+    /// Uses system background colors so the row stays readable in light and dark mode;
+    /// a fixed white fill turned the label white-on-white once the Mac switched to dark.
+    @ViewBuilder
+    private var rowBackground: some View {
+        if isHighlighted {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(isDropTarget ? 1 : 0.85))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(tint.opacity(isDropTarget ? 0.22 : 0))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isDropTarget ? tint : Color.clear, lineWidth: 2)
+                }
+                .shadow(color: .black.opacity(isSelected && !isDropTarget ? 0.05 : 0), radius: 2, y: 1)
+        }
     }
 }
 
@@ -633,81 +639,82 @@ private struct AppCard: View {
         .help("打开\(app.name)")
     }
 
+    /// Icon on the left, name and usage stacked beside it, so a card reads as one row
+    /// instead of an icon floating over empty space.
     private var cardContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            cardTop
+        HStack(alignment: .center, spacing: 12) {
+            AppIconView(path: app.path)
+                .frame(width: 58, height: 58)
 
-            Spacer(minLength: 6)
-
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(app.name)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                usageLine
+                HStack(spacing: 5) {
+                    categoryChip
+                    sizeLabel
+                    if app.isRunning {
+                        memoryLabel
+                    }
+                }
+                .lineLimit(1)
             }
 
-            cardFooter
+            Spacer(minLength: 4)
+
+            VStack(alignment: .trailing, spacing: 8) {
+                if app.isRunning {
+                    Circle()
+                        .fill(AppShelfPalette.success)
+                        .frame(width: 7, height: 7)
+                } else {
+                    Color.clear.frame(width: 7, height: 7)
+                }
+
+                Image(systemName: isHovering ? "arrow.up.right.circle.fill" : "arrow.up.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isHovering ? AppShelfPalette.accent : Color.secondary.opacity(0.45))
+            }
         }
-        .padding(11)
-        .frame(maxWidth: .infinity, minHeight: 124, maxHeight: 124, alignment: .topLeading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, minHeight: 88, maxHeight: 88, alignment: .leading)
         .background(cardBackground)
         .overlay(cardBorder)
         .shadow(color: .black.opacity(isHovering ? 0.09 : 0.035), radius: isHovering ? 9 : 3, y: isHovering ? 4 : 1)
         .scaleEffect(isHovering ? 1.012 : 1)
     }
 
-    private var cardTop: some View {
-        HStack(alignment: .top, spacing: 6) {
-            AppIconView(path: app.path)
-                .frame(width: 40, height: 40)
-
-            Spacer(minLength: 4)
-
-            if app.isRunning {
-                Circle()
-                    .fill(AppShelfPalette.success)
-                    .frame(width: 6, height: 6)
-                    .padding(.top, 4)
-            }
-        }
+    private var categoryChip: some View {
+        Text(app.category)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.primary.opacity(0.07), in: Capsule())
     }
 
-    /// Disk usage is always shown; memory replaces the second slot while the app runs.
-    private var usageLine: some View {
-        HStack(spacing: 5) {
-            Text(metrics.sizeText(for: app.path))
-                .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                .foregroundStyle(.secondary)
-
-            if app.isRunning {
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                HStack(spacing: 3) {
-                    Image(systemName: "memorychip")
-                        .font(.system(size: 8.5, weight: .semibold))
-                    Text(metrics.memoryText(for: app.path))
-                }
-                .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                .foregroundStyle(AppShelfPalette.success)
-            }
-        }
-        .lineLimit(1)
+    private var sizeLabel: some View {
+        Text(metrics.sizeText(for: app.path))
+            .font(.system(size: 10.5, weight: .medium, design: .rounded))
+            .foregroundStyle(.secondary)
     }
 
-    private var cardFooter: some View {
-        HStack(spacing: 6) {
-            Text(app.category)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Image(systemName: isHovering ? "arrow.up.right.circle.fill" : "arrow.up.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(isHovering ? AppShelfPalette.accent : Color.secondary.opacity(0.48))
+    /// Memory usage only appears while the app is running.
+    private var memoryLabel: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "memorychip")
+                .font(.system(size: 8.5, weight: .semibold))
+            Text(metrics.memoryText(for: app.path))
         }
-        .padding(.top, 5)
+        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+        .foregroundStyle(AppShelfPalette.success)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(AppShelfPalette.success.opacity(0.12), in: Capsule())
     }
 
     private var cardBackground: some View {

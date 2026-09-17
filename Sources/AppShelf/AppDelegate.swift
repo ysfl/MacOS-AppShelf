@@ -156,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings(_ sender: Any?) {
-        openSettingsWindow()
+        SettingsWindowController.shared.showWindow()
     }
 
     // MARK: - Helpers
@@ -168,12 +168,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func registerHotKey() {
         let registered = HotKeyCenter.shared.register(HotKeyStore.shared.shortcut)
         HotKeyStore.shared.registrationFailed = !registered
-    }
-
-    /// SwiftUI's Settings scene is opened through the same action the Preferences menu item uses.
-    private func openSettingsWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
     private func symbol(_ name: String) -> NSImage? {

@@ -15,7 +15,16 @@ struct AppItem: Identifiable, Hashable {
     /// Precomputed pinyin and initials so typing in the search fields stays instant.
     let searchTokens: SearchTokens
 
-    init(name: String, path: String, bundleIdentifier: String?, category: String, isRunning: Bool = false) {
+    /// `aliases` carries names the app is known by but does not display, such as
+    /// localized bundle names and the on-disk file name.
+    init(
+        name: String,
+        path: String,
+        bundleIdentifier: String?,
+        category: String,
+        isRunning: Bool = false,
+        aliases: [String] = []
+    ) {
         let normalizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
         self.id = normalizedPath
         self.name = name
@@ -23,7 +32,11 @@ struct AppItem: Identifiable, Hashable {
         self.bundleIdentifier = bundleIdentifier
         self.category = category
         self.isRunning = isRunning
-        self.searchTokens = SearchTokens(name: name, extras: [bundleIdentifier ?? "", category])
+        self.searchTokens = SearchTokens(
+            name: name,
+            aliases: aliases,
+            extras: [bundleIdentifier ?? "", category]
+        )
     }
 
     static func == (lhs: AppItem, rhs: AppItem) -> Bool {
@@ -251,12 +264,44 @@ enum AppDiscoveryService {
               seen.insert(normalized.path).inserted else { return nil }
         let category = category(for: displayName, bundleIdentifier: bundleIdentifier)
 
+        // "WeChat" is filed as 微信 in its own zh-Hans resources and "Code" is really
+        // Visual Studio Code on disk, so search has to know about those names too.
+        var aliases = Self.localizedNames(in: normalized)
+        let fileName = normalized.deletingPathExtension().lastPathComponent
+        if fileName.caseInsensitiveCompare(displayName) != .orderedSame {
+            aliases.append(fileName)
+        }
+
         return AppItem(
             name: displayName,
             path: normalized.path,
             bundleIdentifier: bundleIdentifier,
-            category: category
+            category: category,
+            aliases: aliases
         )
+    }
+
+    /// Reads display names from the bundle's own `InfoPlist.strings` resources.
+    /// Bundles such as WeChat only ship their Chinese name there.
+    private static func localizedNames(in bundleURL: URL) -> [String] {
+        let resources = bundleURL.appendingPathComponent("Contents/Resources")
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: resources.path) else {
+            return []
+        }
+
+        var names: [String] = []
+        for entry in entries where entry.hasSuffix(".lproj") {
+            let stringsURL = resources
+                .appendingPathComponent(entry)
+                .appendingPathComponent("InfoPlist.strings")
+            guard let dictionary = NSDictionary(contentsOf: stringsURL) else { continue }
+            for key in ["CFBundleDisplayName", "CFBundleName"] {
+                if let value = dictionary[key] as? String, !value.isEmpty {
+                    names.append(value)
+                }
+            }
+        }
+        return names
     }
 
     private static func category(for name: String, bundleIdentifier: String?) -> String {

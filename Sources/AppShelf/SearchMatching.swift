@@ -1,38 +1,55 @@
 import Foundation
 
 /// Text tokens precomputed once per app so typing stays responsive.
-/// The tokens cover three ways people search: the real name, the pinyin spelling of a
-/// Chinese name, and the initials of either ("wx" for 微信, "vsc" for Visual Studio Code).
+///
+/// An app is usually known by more than one name: WeChat is filed as 微信 in its own
+/// Chinese resources and Visual Studio Code reports "Code" as its bundle name. Each of
+/// those names becomes a variant, and a query is matched against every variant.
 struct SearchTokens: Hashable, Sendable {
-    let name: String
-    /// Diacritic- and case-insensitive name, used for direct matches.
-    let foldedName: String
-    /// `foldedName` split into words, so word-level matches outrank accidental substrings.
-    let words: [String]
-    /// `foldedName` without whitespace, so "visual studio" matches "visualstudio".
-    let compactName: String
-    /// Pinyin syllables joined together, e.g. 微信 -> "weixin". Empty for Latin-only names.
-    let pinyin: String
-    /// First letter of every syllable or word, e.g. 微信 -> "wx".
-    let initials: String
-    /// Bundle identifier and category, matched with a lower weight than the name itself.
+    struct Variant: Hashable, Sendable {
+        /// Diacritic- and case-insensitive name.
+        let folded: String
+        /// `folded` split into words, so word matches outrank accidental substrings.
+        let words: [String]
+        /// `folded` without whitespace, so "visual studio" matches "visualstudio".
+        let compact: String
+        /// Pinyin syllables joined together, e.g. 微信 -> "weixin". Empty for Latin-only names.
+        let pinyin: String
+        /// First letter of every syllable or word, e.g. 微信 -> "wx", Visual Studio Code -> "vsc".
+        let initials: String
+    }
+
+    /// The display name is first; localized and file-system names follow.
+    let variants: [Variant]
+    /// Bundle identifier and category, matched with a lower weight than the names.
     let extras: String
 
-    init(name: String, extras: [String] = []) {
-        let folded = Self.fold(name)
-        let syllables = Pinyin.syllables(of: name).map { Self.fold($0) }
-        self.name = name
-        self.foldedName = folded
-        self.words = folded
+    init(name: String, aliases: [String] = [], extras: [String] = []) {
+        var seen = Set<String>()
+        var variants: [Variant] = []
+
+        for text in [name] + aliases {
+            let folded = Self.fold(text)
+            guard !folded.isEmpty, seen.insert(folded).inserted else { continue }
+            variants.append(Self.variant(folded: folded, original: text))
+        }
+
+        self.variants = variants
+        self.extras = Self.fold(extras.joined(separator: " "))
+    }
+
+    private static func variant(folded: String, original: String) -> Variant {
+        let words = folded
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
-        self.compactName = folded.filter { !$0.isWhitespace }
+        let compact = folded.filter { !$0.isWhitespace }
+        let syllables = Pinyin.syllables(of: original).map { Self.fold($0) }
         let transliteration = syllables.joined()
         // For Latin names the transliteration repeats the name itself, so keeping it would
         // only restate the matches above and add noise such as "ps" inside "appstore".
-        self.pinyin = transliteration == self.compactName ? "" : transliteration
-        self.initials = syllables.compactMap(\.first).map(String.init).joined()
-        self.extras = Self.fold(extras.joined(separator: " "))
+        let pinyin = transliteration == compact ? "" : transliteration
+        let initials = syllables.compactMap(\.first).map(String.init).joined()
+        return Variant(folded: folded, words: words, compact: compact, pinyin: pinyin, initials: initials)
     }
 
     private static func fold(_ text: String) -> String {
@@ -60,12 +77,40 @@ enum Pinyin {
 enum SearchMatcher {
     /// Returns the relevance score for `query`, or `nil` when the app should be filtered out.
     static func score(_ tokens: SearchTokens, query: String) -> Int? {
-        let foldedQuery = Self.normalize(query)
+        let foldedQuery = normalize(query)
         guard !foldedQuery.isEmpty else { return 0 }
 
-        let compactQuery = Self.compact(foldedQuery)
+        let compactQuery = compact(foldedQuery)
         guard !compactQuery.isEmpty else { return nil }
 
+        var best: Int?
+
+        func offer(_ value: Int) {
+            guard value > 0 else { return }
+            if let current = best {
+                if value > current { best = value }
+            } else {
+                best = value
+            }
+        }
+
+        for (index, variant) in tokens.variants.enumerated() {
+            // The displayed name should win a tie against a localized or file-system alias.
+            let bonus = index == 0 ? 0 : -20
+            if let value = score(variant, foldedQuery: foldedQuery, compactQuery: compactQuery) {
+                offer(value + bonus)
+            }
+        }
+
+        // Secondary text such as the bundle identifier or the category.
+        if !tokens.extras.isEmpty && tokens.extras.contains(foldedQuery) {
+            offer(220)
+        }
+
+        return best
+    }
+
+    private static func score(_ variant: SearchTokens.Variant, foldedQuery: String, compactQuery: String) -> Int? {
         var best: Int?
 
         func offer(_ value: Int) {
@@ -77,65 +122,60 @@ enum SearchMatcher {
         }
 
         // 1. Whole-string name matches.
-        if tokens.foldedName == foldedQuery {
+        if variant.folded == foldedQuery {
             offer(1000)
-        } else if tokens.foldedName.hasPrefix(foldedQuery) {
+        } else if variant.folded.hasPrefix(foldedQuery) {
             offer(860)
-        } else if tokens.foldedName.contains(foldedQuery) {
+        } else if variant.folded.contains(foldedQuery) {
             offer(620)
         }
 
         // 2. Word matches, e.g. "store" for App Store or "photo" for Adobe Photoshop.
-        if tokens.words.contains(where: { $0 == compactQuery }) {
+        if variant.words.contains(where: { $0 == compactQuery }) {
             offer(900)
-        } else if tokens.words.contains(where: { $0.hasPrefix(compactQuery) }) {
+        } else if variant.words.contains(where: { $0.hasPrefix(compactQuery) }) {
             offer(700)
-        } else if tokens.words.contains(where: { $0.contains(compactQuery) }) {
+        } else if variant.words.contains(where: { $0.contains(compactQuery) }) {
             offer(520)
         }
 
         // 3. Name without spaces. Only the prefix counts here, otherwise letters that
         // merely run across two words ("ps" inside "appstore") outrank real word matches.
-        if tokens.compactName.hasPrefix(compactQuery) {
+        if variant.compact.hasPrefix(compactQuery) {
             offer(480)
         }
 
-        // 3. Pinyin: full spelling and initials.
-        if !tokens.pinyin.isEmpty {
-            if tokens.pinyin == compactQuery {
+        // 4. Pinyin: full spelling and initials.
+        if !variant.pinyin.isEmpty {
+            if variant.pinyin == compactQuery {
                 offer(540)
-            } else if tokens.pinyin.hasPrefix(compactQuery) {
+            } else if variant.pinyin.hasPrefix(compactQuery) {
                 offer(510)
-            } else if tokens.pinyin.contains(compactQuery) {
+            } else if variant.pinyin.contains(compactQuery) {
                 offer(470)
             }
         }
 
-        if !tokens.initials.isEmpty {
-            if tokens.initials == compactQuery {
+        if !variant.initials.isEmpty {
+            if variant.initials == compactQuery {
                 offer(500)
-            } else if tokens.initials.hasPrefix(compactQuery) {
+            } else if variant.initials.hasPrefix(compactQuery) {
                 offer(480)
-            } else if tokens.initials.contains(compactQuery) {
+            } else if variant.initials.contains(compactQuery) {
                 offer(430)
             }
-        }
-
-        // 4. Secondary text such as the bundle identifier or the category.
-        if !tokens.extras.isEmpty && tokens.extras.contains(foldedQuery) {
-            offer(220)
         }
 
         // 5. Loose subsequence matching. Only used for two or more characters,
         // otherwise almost every app would match a single letter. A match that starts
         // at the beginning of a word ("ps" -> Photoshop) beats a scattered one.
         if compactQuery.count >= 2 {
-            if tokens.words.contains(where: { $0.first == compactQuery.first && isSubsequence(compactQuery, in: $0) }) {
+            if variant.words.contains(where: { $0.first == compactQuery.first && isSubsequence(compactQuery, in: $0) }) {
                 offer(300)
             }
-            if isSubsequence(compactQuery, in: tokens.compactName) { offer(150) }
-            if isSubsequence(compactQuery, in: tokens.pinyin) { offer(160) }
-            if isSubsequence(compactQuery, in: tokens.initials) { offer(120) }
+            if isSubsequence(compactQuery, in: variant.compact) { offer(150) }
+            if isSubsequence(compactQuery, in: variant.pinyin) { offer(160) }
+            if isSubsequence(compactQuery, in: variant.initials) { offer(120) }
         }
 
         return best

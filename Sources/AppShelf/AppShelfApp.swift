@@ -30,10 +30,13 @@ struct AppShelfApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option])
             }
-        }
 
-        Settings {
-            SettingsView()
+            CommandGroup(after: .appSettings) {
+                Button("设置…") {
+                    SettingsWindowController.shared.showWindow()
+                }
+                .keyboardShortcut(",", modifiers: [.command])
+            }
         }
     }
 }

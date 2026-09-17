@@ -102,6 +102,40 @@ struct ShortcutRecorderView: View {
     }
 }
 
+/// Owns the settings window.
+///
+/// The window is created directly with AppKit so the same entry point works from the
+/// toolbar, the Dock menu, and the menu bar icon, instead of relying on a private action.
+final class SettingsWindowController: NSWindowController {
+    static let shared = SettingsWindowController()
+
+    private init() {
+        let view = SettingsView()
+        let hosting = NSHostingView(rootView: view)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 430, height: 470),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "设置"
+        window.contentView = hosting
+        window.isReleasedWhenClosed = false
+        window.center()
+        super.init(window: window)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("SettingsWindowController is only created programmatically")
+    }
+
+    func showWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+}
+
 /// Preferences for the search panel, the menu bar icon, and cached usage data.
 struct SettingsView: View {
     @ObservedObject private var hotKeys = HotKeyStore.shared
