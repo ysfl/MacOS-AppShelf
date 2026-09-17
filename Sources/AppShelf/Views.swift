@@ -31,9 +31,39 @@ final class DragHighlight: ObservableObject {
     @Published var sectionTargetID: UUID?
     @Published var sidebarGroupID: UUID?
     @Published var quickToolTarget = false
+    /// True for the whole drag, not just while a target is under the cursor.
+    /// The remove strips stay visible for the entire drag so they cannot flicker
+    /// when the cursor crosses their edge.
+    @Published var isDragging = false
+
+    private var endWork: DispatchWorkItem?
 
     var isReordering: Bool {
         sectionTargetID != nil || sidebarGroupID != nil
+    }
+
+    /// Called by every drop destination while the cursor is over it.
+    func setHover(_ isTargeted: Bool) {
+        endWork?.cancel()
+        if isTargeted {
+            isDragging = true
+            return
+        }
+        // Leaving a target may just mean the cursor moved to another one, so the flag
+        // only clears after a short pause with nothing hovered.
+        let work = DispatchWorkItem { self.isDragging = false }
+        endWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: work)
+    }
+
+    /// Called once a drop has been handled, so the strips retract immediately.
+    func endDrag() {
+        endWork?.cancel()
+        endWork = nil
+        isDragging = false
+        sectionTargetID = nil
+        sidebarGroupID = nil
+        quickToolTarget = false
     }
 
     func clear() {
@@ -50,24 +80,56 @@ final class DragHighlight: ObservableObject {
 final class DropAnimator: ObservableObject {
     static let shared = DropAnimator()
 
+    /// Where the drop happened. The two destinations animate differently on purpose:
+    /// the grid pops the card in where it now sits, the sidebar swallows the icon.
+    enum Target {
+        case grid
+        case sidebar
+    }
+
     /// Bumped on every drop so the destination can replay the animation.
     @Published var token = 0
+    @Published var target: Target = .grid
     @Published var groupID: UUID?
+    /// Icon shown shrinking into a sidebar row.
     @Published var path: String?
+    /// Card that should pop into place inside the grid.
+    @Published var landedPath: String?
 
-    func play(groupID: UUID, path: String? = nil) {
+    /// An app dropped inside the page: it appears where it now belongs.
+    func playGrid(groupID: UUID, path: String) {
+        target = .grid
+        self.groupID = groupID
+        self.path = nil
+        landedPath = path
+        token += 1
+    }
+
+    /// An app dropped on a sidebar group: the icon shrinks into that row.
+    func playSidebar(groupID: UUID, path: String) {
+        target = .sidebar
         self.groupID = groupID
         self.path = path
+        landedPath = nil
+        token += 1
+    }
+
+    func play(groupID: UUID) {
+        target = .sidebar
+        self.groupID = groupID
+        path = nil
+        landedPath = nil
         token += 1
     }
 
     func finish() {
         groupID = nil
         path = nil
+        landedPath = nil
     }
 }
 
-/// Shrinking ghost of the dropped app, shown on the group that received it.
+/// Shrinking ghost of the dropped app, shown on the sidebar group that received it.
 private struct DropPulse: View {
     @ObservedObject private var animator = DropAnimator.shared
     let groupID: UUID
@@ -77,7 +139,7 @@ private struct DropPulse: View {
 
     var body: some View {
         ZStack {
-            if animator.groupID == groupID {
+            if animator.target == .sidebar && animator.groupID == groupID {
                 Group {
                     if let path = animator.path {
                         Image(nsImage: IconCache.shared.image(for: path))
@@ -487,11 +549,6 @@ struct ContentView: View {
         // Only this small view watches the drag state, so highlighting a
         // section never rebuilds the cards inside it.
         .background { SectionDropHighlight(groupID: section.groupID) }
-        .overlay {
-            if let groupID = section.groupID {
-                DropPulse(groupID: groupID)
-            }
-        }
         // Floats over the bottom of the block rather than pushing the grid around,
         // so appearing and disappearing never triggers a relayout mid-drag.
         .overlay(alignment: .bottom) {
@@ -500,7 +557,11 @@ struct ContentView: View {
                     groupID: groupID,
                     onRemove: { paths in
                         paths.forEach { store.removeApp($0, from: groupID) }
-                        DropAnimator.shared.play(groupID: groupID, path: paths.first)
+                        // The app reappears in the ungrouped section, so pop it in there.
+                        if let path = paths.first {
+                            DropAnimator.shared.playGrid(groupID: groupID, path: path)
+                        }
+                        highlight.endDrag()
                     },
                     onMoveGroup: { dragged in
                         store.moveGroup(dragged, before: groupID)
@@ -516,16 +577,21 @@ struct ContentView: View {
 
             if let dragged = items.first(where: { $0.kind == .group })?.groupID {
                 store.moveGroup(dragged, before: groupID)
+                highlight.endDrag()
                 return true
             }
 
             let paths = items.filter(\.isAppPath).map(\.value)
             guard !paths.isEmpty else { return false }
             store.addApps(paths, to: groupID)
-            DropAnimator.shared.play(groupID: groupID, path: paths.first)
+            if let path = paths.first {
+                DropAnimator.shared.playGrid(groupID: groupID, path: path)
+            }
+            highlight.endDrag()
             return true
         } isTargeted: { isTargeted in
             highlight.sectionTargetID = isTargeted ? section.groupID : nil
+            highlight.setHover(isTargeted)
         }
     }
 
@@ -665,6 +731,7 @@ struct ContentView: View {
                     // Dropping another group on a card reorders that group ahead of this one.
                     if let groupID = items.first(where: { $0.kind == .group })?.groupID {
                         store.moveGroup(groupID, before: sectionGroupID)
+                        highlight.endDrag()
                         return true
                     }
 
@@ -672,9 +739,14 @@ struct ContentView: View {
                     let paths = items.filter(\.isAppPath).map(\.value)
                     guard !paths.isEmpty else { return false }
                     store.moveApps(paths, before: app, in: sectionGroupID)
-                    DropAnimator.shared.play(groupID: sectionGroupID, path: paths.first)
+                    if let path = paths.first {
+                        DropAnimator.shared.playGrid(groupID: sectionGroupID, path: path)
+                    }
+                    highlight.endDrag()
                     return true
-                } isTargeted: { _ in }
+                } isTargeted: { isTargeted in
+                    highlight.setHover(isTargeted)
+                }
         } else {
             card
         }
@@ -865,16 +937,21 @@ private struct SidebarGroups: View {
                 .dropDestination(for: ShelfDragItem.self) { items, _ in
                     if let dragged = items.first(where: { $0.kind == .group })?.groupID {
                         store.moveGroup(dragged, before: group.id)
+                        highlight.endDrag()
                         return true
                     }
 
                     let paths = items.filter(\.isAppPath).map(\.value)
                     guard !paths.isEmpty else { return false }
                     store.addApps(paths, to: group.id)
-                    DropAnimator.shared.play(groupID: group.id, path: paths.first)
+                    if let path = paths.first {
+                        DropAnimator.shared.playSidebar(groupID: group.id, path: path)
+                    }
+                    highlight.endDrag()
                     return true
                 } isTargeted: { isTargeted in
                     highlight.sidebarGroupID = isTargeted ? group.id : nil
+                    highlight.setHover(isTargeted)
                 }
                 // The dropped app shrinks into the row instead of simply vanishing.
                 .overlay { DropPulse(groupID: group.id) }
@@ -1149,7 +1226,10 @@ private struct AppCard: View {
     let onQuit: (() -> Void)?
     let onForceQuit: (() -> Void)?
 
+    @ObservedObject private var animator = DropAnimator.shared
     @State private var isHovering = false
+    @State private var popScale: CGFloat = 1
+    @State private var popOpacity: Double = 1
 
     var body: some View {
         Button(action: onOpen) {
@@ -1231,6 +1311,25 @@ private struct AppCard: View {
         // No animated shadow or scale: animating those on two hundred tiles at once is
         // what made hovering and dragging feel heavy.
         .scaleEffect(isHovering ? 1.015 : 1)
+        // An app dropped inside the page pops up where its card now sits.
+        .scaleEffect(popScale)
+        .opacity(popOpacity)
+        .onChange(of: animator.token, initial: false) { _, _ in
+            guard animator.target == .grid, animator.landedPath == app.path else { return }
+            popIn()
+        }
+    }
+
+    private func popIn() {
+        popScale = 0.55
+        popOpacity = 0.2
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.62)) {
+            popScale = 1
+            popOpacity = 1
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            animator.finish()
+        }
     }
 
     /// Category, disk usage, and memory share one small line. The category is only
@@ -1315,9 +1414,11 @@ private struct RemoveFromGroupStrip: View {
     let onMoveGroup: (UUID) -> Void
 
     @State private var isTargeted = false
+    private let debounceDelay = 0.22
 
     var body: some View {
-        let isVisible = isTargeted || highlight.sectionTargetID == groupID
+        // Visible for the whole drag; only the fill follows the cursor.
+        let isVisible = highlight.isDragging || isTargeted
 
         ZStack {
             if isVisible {
@@ -1353,15 +1454,32 @@ private struct RemoveFromGroupStrip: View {
                     onRemove(paths)
                     return true
                 } isTargeted: { isTargeted in
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        self.isTargeted = isTargeted
-                    }
+                    setTargeted(isTargeted)
                 }
             }
         }
         .animation(.easeOut(duration: 0.12), value: isVisible)
         .allowsHitTesting(isVisible)
     }
+
+    /// Debounced so a cursor sitting on the edge cannot flip the strip on and off.
+    private func setTargeted(_ value: Bool) {
+        highlight.setHover(value)
+        if value {
+            targetedWork?.cancel()
+            withAnimation(.easeOut(duration: 0.12)) { isTargeted = true }
+            return
+        }
+
+        targetedWork?.cancel()
+        let work = DispatchWorkItem {
+            withAnimation(.easeOut(duration: 0.12)) { self.isTargeted = false }
+        }
+        targetedWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + debounceDelay, execute: work)
+    }
+
+    @State private var targetedWork: DispatchWorkItem?
 }
 
 /// The quick tool row at the top of All Apps.
