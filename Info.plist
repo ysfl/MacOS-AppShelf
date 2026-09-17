@@ -30,19 +30,9 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>local.dan.AppShelf.group</string>
+			<string>local.dan.AppShelf.drag</string>
 			<key>UTTypeDescription</key>
-			<string>应用架分组</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-			</array>
-		</dict>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>local.dan.AppShelf.quicktool</string>
-			<key>UTTypeDescription</key>
-			<string>应用架快捷工具</string>
+			<string>应用架拖拽项</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>

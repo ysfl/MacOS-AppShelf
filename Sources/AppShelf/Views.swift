@@ -13,35 +13,47 @@ enum AppShelfPalette {
 }
 
 extension UTType {
-    /// In-app drag types. Declaring them separately keeps an app card (plain text),
-    /// a group row, and a quick tool tile from being mistaken for one another.
-    static let appShelfGroup = UTType(exportedAs: "local.dan.AppShelf.group")
-    static let appShelfQuickTool = UTType(exportedAs: "local.dan.AppShelf.quicktool")
+    /// One in-app drag type for every draggable thing in the window.
+    ///
+    /// A view can only reliably carry a single drop destination, so app cards, group
+    /// rows, and quick tools all share this type and are told apart by `kind`.
+    static let appShelfDragItem = UTType(exportedAs: "local.dan.AppShelf.drag")
 }
 
-/// Payload of a dragged sidebar group or section heading.
-private struct GroupDragPayload: Codable, Transferable {
-    let id: UUID
+/// What is being dragged: an app card, a group, or a quick tool tile.
+private struct ShelfDragItem: Codable, Transferable {
+    enum Kind: String, Codable {
+        case app
+        case group
+        case quickTool
+    }
+
+    let kind: Kind
+    let value: String
 
     static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: .appShelfGroup)
+        CodableRepresentation(contentType: .appShelfDragItem)
     }
-}
 
-/// Payload of a dragged quick tool tile.
-private struct QuickToolDragPayload: Codable, Transferable {
-    let id: String
-
-    static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: .appShelfQuickTool)
+    static func app(_ path: String) -> ShelfDragItem {
+        ShelfDragItem(kind: .app, value: path)
     }
-}
 
-/// App cards drag their bundle path as plain text; this filters real bundle paths out
-/// from any other text that might be dropped onto the window.
-private enum ShelfDragPayload {
-    static func isAppPath(_ payload: String) -> Bool {
-        payload.hasSuffix(".app")
+    static func group(_ id: UUID) -> ShelfDragItem {
+        ShelfDragItem(kind: .group, value: id.uuidString)
+    }
+
+    static func quickTool(_ id: String) -> ShelfDragItem {
+        ShelfDragItem(kind: .quickTool, value: id)
+    }
+
+    var groupID: UUID? {
+        guard kind == .group else { return nil }
+        return UUID(uuidString: value)
+    }
+
+    var isAppPath: Bool {
+        kind == .app && value.hasSuffix(".app")
     }
 }
 
@@ -222,10 +234,11 @@ struct ContentView: View {
                 .padding(.horizontal, 28)
                 .padding(.vertical, 24)
                 .frame(maxWidth: .infinity, minHeight: 320, alignment: .topLeading)
-                // Dropping a quick tool here takes it out of the toolbar row.
-                .dropDestination(for: QuickToolDragPayload.self) { items, _ in
-                    guard !items.isEmpty else { return false }
-                    items.forEach { quickTools.remove($0.id) }
+                // Dropping a quick tool anywhere in the content area removes it.
+                .dropDestination(for: ShelfDragItem.self) { items, _ in
+                    let removed = items.filter { $0.kind == .quickTool }
+                    guard !removed.isEmpty else { return false }
+                    removed.forEach { quickTools.remove($0.value) }
                     store.note("已从快捷工具移除")
                     return true
                 } isTargeted: { _ in }
@@ -375,6 +388,23 @@ struct ContentView: View {
                             style: isTargeted(section) ? StrokeStyle(lineWidth: 2) : StrokeStyle(lineWidth: 1, dash: [5, 4])
                         )
                 }
+                // The whole block accepts drops: group reordering and filing an app into
+                // this group both work anywhere inside it, not only on the heading.
+                .dropDestination(for: ShelfDragItem.self) { items, _ in
+                    guard let groupID = section.groupID else { return false }
+
+                    if let dragged = items.first(where: { $0.kind == .group })?.groupID {
+                        store.moveGroup(dragged, before: groupID)
+                        return true
+                    }
+
+                    let paths = items.filter(\.isAppPath).map(\.value)
+                    guard !paths.isEmpty else { return false }
+                    store.addApps(paths, to: groupID)
+                    return true
+                } isTargeted: { isTargeted in
+                    isSectionDropTarget = isTargeted ? section.groupID : nil
+                }
                 .animation(.easeOut(duration: 0.12), value: isSectionDropTarget)
             }
         }
@@ -394,9 +424,10 @@ struct ContentView: View {
         return isGroupReordering ? AppShelfPalette.accent.opacity(0.35) : Color.clear
     }
 
-    /// True while any group row or section heading is hovering over a drop target.
+    /// True while a drag is hovering over a group row or a section, so every block can
+    /// show that it is a possible destination.
     private var isGroupReordering: Bool {
-        isSectionDropTarget != nil || store.groupReorderTargetID != nil
+        isSectionDropTarget != nil || store.highlightedGroupID != nil
     }
 
 
@@ -430,20 +461,13 @@ struct ContentView: View {
 
         if let groupID = section.groupID {
             header
-                .draggable(GroupDragPayload(id: groupID)) {
+                .draggable(ShelfDragItem.group(groupID)) {
                     GroupDragPreview(
                         title: section.title,
                         symbol: section.symbol,
                         tint: section.tint,
                         apps: section.apps
                     )
-                }
-                .dropDestination(for: GroupDragPayload.self) { items, _ in
-                    guard let dragged = items.first?.id else { return false }
-                    store.moveGroup(dragged, before: groupID)
-                    return true
-                } isTargeted: { isTargeted in
-                    isSectionDropTarget = isTargeted ? groupID : nil
                 }
         } else {
             header
@@ -470,14 +494,28 @@ struct ContentView: View {
         )
         // The bundle path is the drag payload: dropping on a sidebar group files the app,
         // dropping on another card inside a section reorders it.
-        .draggable(app.path) {
+        .draggable(ShelfDragItem.app(app.path)) {
             AppIconView(path: app.path)
                 .frame(width: 64, height: 64)
         }
-        .dropDestination(for: String.self) { items, _ in
+        .dropDestination(for: ShelfDragItem.self) { items, _ in
+            // A quick tool dropped anywhere outside its row is removed.
+            if let tool = items.first(where: { $0.kind == .quickTool }) {
+                quickTools.remove(tool.value)
+                store.note("已从快捷工具移除")
+                return true
+            }
+
             guard let sectionGroupID else { return false }
-            // Only other app cards reorder; quick tool payloads belong to the toolbar row.
-            let paths = items.filter(ShelfDragPayload.isAppPath)
+
+            // Dropping another group on a card reorders that group ahead of this one.
+            if let groupID = items.first(where: { $0.kind == .group })?.groupID {
+                store.moveGroup(groupID, before: sectionGroupID)
+                return true
+            }
+
+            // Dropping an app here reorders it, or files it into this group from outside.
+            let paths = items.filter(\.isAppPath).map(\.value)
             guard !paths.isEmpty else { return false }
             store.moveApps(paths, before: app, in: sectionGroupID)
             return true
@@ -557,8 +595,8 @@ struct ContentView: View {
                 )
         }
         // Dropping an app card here pins it as a quick tool.
-        .dropDestination(for: String.self) { items, _ in
-            let paths = items.filter(ShelfDragPayload.isAppPath)
+        .dropDestination(for: ShelfDragItem.self) { items, _ in
+            let paths = items.filter(\.isAppPath).map(\.value)
             guard !paths.isEmpty else { return false }
             for path in paths {
                 let name = AppDiscoveryService.item(for: URL(fileURLWithPath: path))?.name
@@ -724,7 +762,7 @@ struct SidebarView: View {
                             }
                             // The row accepts two kinds of drop: an app card (files it here)
                             // or another group row (reorders the sidebar).
-                            .draggable(GroupDragPayload(id: group.id)) { [store] in
+                            .draggable(ShelfDragItem.group(group.id)) { [store] in
                                 // The whole group travels with the cursor, cards included.
                                 GroupDragPreview(
                                     title: group.name,
@@ -733,20 +771,15 @@ struct SidebarView: View {
                                     apps: Array(store.orderedApps(in: group.id).prefix(6))
                                 )
                             }
-                            // Two drop targets on one row: an app card files the app here,
-                            // another group row reorders the sidebar.
-                            .dropDestination(for: GroupDragPayload.self) { items, _ in
-                                guard let dragged = items.first?.id else { return false }
-                                store.moveGroup(dragged, before: group.id)
-                                return true
-                            } isTargeted: { isTargeted in
-                                store.groupReorderTargetID = isTargeted ? group.id : nil
-                                if !isTargeted && store.highlightedGroupID == group.id {
-                                    store.highlightedGroupID = nil
+                            // One drop target for the whole row: another group reorders,
+                            // an app card is filed into this group.
+                            .dropDestination(for: ShelfDragItem.self) { items, _ in
+                                if let dragged = items.first(where: { $0.kind == .group })?.groupID {
+                                    store.moveGroup(dragged, before: group.id)
+                                                                        return true
                                 }
-                            }
-                            .dropDestination(for: String.self) { items, _ in
-                                let paths = items.filter(ShelfDragPayload.isAppPath)
+
+                                let paths = items.filter(\.isAppPath).map(\.value)
                                 guard !paths.isEmpty else { return false }
                                 store.addApps(paths, to: group.id)
                                 return true
@@ -932,7 +965,7 @@ private struct ToolRow: View {
         }
         .buttonStyle(.plain)
         .help("打开\(tool.title)")
-        .draggable(QuickToolDragPayload(id: tool.id)) {
+        .draggable(ShelfDragItem.quickTool(tool.id)) {
             Label(tool.title, systemImage: "square.dashed")
                 .font(.system(size: 12, weight: .semibold))
                 .padding(.horizontal, 10)
@@ -1141,7 +1174,7 @@ private struct QuickToolTile: View {
         .buttonStyle(.plain)
         .help("打开\(tool.title)")
         // Drag the tile out of the row to remove it.
-        .draggable(QuickToolDragPayload(id: tool.id)) {
+        .draggable(ShelfDragItem.quickTool(tool.id)) {
             Label(tool.title, systemImage: "square.dashed")
                 .font(.system(size: 12, weight: .semibold))
                 .padding(.horizontal, 10)

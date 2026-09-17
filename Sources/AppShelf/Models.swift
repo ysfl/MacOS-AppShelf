@@ -357,10 +357,8 @@ final class LauncherStore: ObservableObject {
     /// Disk and memory usage for the cards.
     let metrics = AppMetrics.shared
 
-    /// The sidebar group that a drag is currently hovering over, used for highlight feedback.
+    /// The sidebar group a drag is hovering over, used for highlight feedback.
     @Published var highlightedGroupID: UUID?
-    /// Set only while a group itself is being dragged, so other rows can show reorder hints.
-    @Published var groupReorderTargetID: UUID?
 
     private let stateKey = "AppShelf.state.v2"
     private var statusClearTask: Task<Void, Never>?
