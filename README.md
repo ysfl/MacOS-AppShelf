@@ -4,7 +4,7 @@
 
 AppShelf is a native macOS app launcher. It reads `.app` bundles from common application folders, organizes them into groups, and opens them from a searchable grid.
 
-当前版本 / Current version: `1.0.0`
+当前版本 / Current version: `1.1.0`
 
 ## About
 
@@ -24,6 +24,18 @@ If you switch between Finder, Launchpad, and Spotlight to find apps, AppShelf gi
 - Lets you create, edit, and delete groups with a name, an SF Symbol, and a color.
 - 右键菜单支持加入其他分组、从当前分组移除、在 Finder 中显示。
 - The context menu can add an app to another group, remove it from the current group, or reveal it in Finder.
+- 可以按住应用图标直接拖到侧边栏分组完成归类，分组会即时更新数量。
+- App cards can be dragged onto a sidebar group to file them; the group count updates immediately.
+- 搜索支持中文拼音首字母、全拼和英文缩写，并按相关度排序。输入“wx”可找到微信，“vsc”可找到 Visual Studio Code。
+- Search understands Chinese pinyin initials, full pinyin, and English acronyms, ranked by relevance. Typing "wx" finds 微信 and "vsc" finds Visual Studio Code.
+- 卡片显示磁盘占用（如 `1.2 GB`、`256 MB`）；运行中的应用同时显示实时内存占用（如 `512 M`）。
+- Each card shows its disk usage (e.g. `1.2 GB`, `256 MB`); running apps also show live memory usage (e.g. `512 M`).
+- 在 Dock 图标上右键，可以直接打开聚焦搜索、应用架窗口、任意分组或设置。
+- Right-clicking the Dock icon opens focus search, the app window, any group, or the settings panel.
+- 支持类似 macOS 聚焦的独立搜索浮层：用快捷键唤出，输入后回车直接打开应用，不显示完整主界面。
+- A Spotlight-like floating panel can be summoned with a global shortcut; press Return to launch the app without opening the full window.
+- 聚焦搜索的快捷键可以在“设置”中自行录制，也可以关闭或恢复默认（默认 ⌥Space）。
+- The focus-search shortcut can be recorded in Settings, disabled, or restored to its default (⌥Space).
 - 提供计算器、终端、活动监视器、截图和系统设置快捷入口，也可以手动加入任意 `.app`。
 - Includes shortcuts for Calculator, Terminal, Activity Monitor, Screenshot, and System Settings. Any `.app` can also be added manually.
 
@@ -86,10 +98,22 @@ hdiutil verify release/AppShelf-1.0.0.dmg
 
 ## 项目结构 / Project Layout
 
-- `Sources/AppShelf/Models.swift`：应用模型、目录扫描、分类、运行状态和分组持久化。
-- `Sources/AppShelf/Models.swift`: app models, discovery, categorization, running state, and group persistence.
-- `Sources/AppShelf/Views.swift`：主窗口、侧边栏、应用卡片和编辑面板。
-- `Sources/AppShelf/Views.swift`: the main window, sidebar, app cards, and editor sheets.
+- `Sources/AppShelf/Models.swift`：应用模型、目录扫描、分类、运行状态、搜索排序和分组持久化。
+- `Sources/AppShelf/Models.swift`: app models, discovery, categorization, running state, result ranking, and group persistence.
+- `Sources/AppShelf/Views.swift`：主窗口、侧边栏、应用卡片、拖拽归组和编辑面板。
+- `Sources/AppShelf/Views.swift`: the main window, sidebar, app cards, drag-to-group, and editor sheets.
+- `Sources/AppShelf/SearchMatching.swift`：拼音转换、首字母和模糊匹配的打分逻辑。
+- `Sources/AppShelf/SearchMatching.swift`: pinyin conversion plus initials and fuzzy-match scoring.
+- `Sources/AppShelf/AppMetrics.swift`：磁盘占用测量、缓存和运行中进程的内存读取。
+- `Sources/AppShelf/AppMetrics.swift`: disk usage measurement, caching, and memory reads for running processes.
+- `Sources/AppShelf/HotKey.swift`：全局快捷键的 Carbon 注册与偏好设置存储。
+- `Sources/AppShelf/HotKey.swift`: Carbon registration of the global shortcut and its persisted preference.
+- `Sources/AppShelf/SpotlightPanel.swift`：聚焦式浮动搜索面板及其 AppKit 窗口。
+- `Sources/AppShelf/SpotlightPanel.swift`: the Spotlight-style floating panel and its AppKit window.
+- `Sources/AppShelf/SettingsView.swift`：快捷键录制与开关偏好。
+- `Sources/AppShelf/SettingsView.swift`: the shortcut recorder and preference toggles.
+- `Sources/AppShelf/AppDelegate.swift`：Dock 菜单、菜单栏图标和热键接线。
+- `Sources/AppShelf/AppDelegate.swift`: the Dock menu, menu bar icon, and hotkey wiring.
 - `Sources/AppShelf/AppShelfApp.swift`：SwiftUI 应用入口和窗口命令。
 - `Sources/AppShelf/AppShelfApp.swift`: the SwiftUI entry point and window commands.
 - `Scripts/build-app.sh`：构建并 ad-hoc 签名 `.app`。
@@ -102,6 +126,10 @@ hdiutil verify release/AppShelf-1.0.0.dmg
 应用列表来自本机文件系统和 `NSWorkspace`。分组只写入当前用户的 `UserDefaults`；应用架不会上传应用列表，也不会移动、修改或卸载被发现的应用。点击“添加应用”时，macOS 的文件选择器只允许选择 `.app` 包。
 
 The app list comes from the local file system and `NSWorkspace`. Groups are stored in the current user's `UserDefaults`. AppShelf does not upload the app list and does not move, modify, or uninstall discovered apps. The file picker accepts `.app` bundles when you choose “Add app”.
+
+磁盘占用只在沙箱范围之外读取 bundle 内文件大小，结果缓存在本机 `UserDefaults`；内存占用通过系统进程接口读取常驻内存。全局快捷键由 Carbon 注册，需要应用处于运行状态。
+
+Disk usage is computed by reading file sizes inside each bundle and is cached locally in `UserDefaults`; memory usage is read from the system process interface as resident memory. The global shortcut is registered through Carbon and requires the app to be running.
 
 ## 贡献 / Contributing
 

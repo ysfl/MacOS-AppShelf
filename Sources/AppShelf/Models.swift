@@ -12,6 +12,8 @@ struct AppItem: Identifiable, Hashable {
     let bundleIdentifier: String?
     let category: String
     var isRunning: Bool
+    /// Precomputed pinyin and initials so typing in the search fields stays instant.
+    let searchTokens: SearchTokens
 
     init(name: String, path: String, bundleIdentifier: String?, category: String, isRunning: Bool = false) {
         let normalizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
@@ -21,6 +23,7 @@ struct AppItem: Identifiable, Hashable {
         self.bundleIdentifier = bundleIdentifier
         self.category = category
         self.isRunning = isRunning
+        self.searchTokens = SearchTokens(name: name, extras: [bundleIdentifier ?? "", category])
     }
 
     static func == (lhs: AppItem, rhs: AppItem) -> Bool {
@@ -303,8 +306,17 @@ final class LauncherStore: ObservableObject {
     @Published private(set) var isLoading = true
     @Published private(set) var lastUpdated = Date()
     @Published var errorMessage: String?
+    /// Short-lived feedback shown in the footer, e.g. after an app is dropped onto a group.
+    @Published var statusMessage: String?
+
+    /// Disk and memory usage for the cards.
+    let metrics = AppMetrics.shared
+
+    /// The sidebar group that a drag is currently hovering over, used for highlight feedback.
+    @Published var highlightedGroupID: UUID?
 
     private let stateKey = "AppShelf.state.v2"
+    private var statusClearTask: Task<Void, Never>?
     private var loadedPersistedState = false
 
     init() {
@@ -353,11 +365,17 @@ final class LauncherStore: ObservableObject {
 
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedQuery.isEmpty {
-            result = result.filter { app in
-                app.name.localizedCaseInsensitiveContains(trimmedQuery)
-                    || app.category.localizedCaseInsensitiveContains(trimmedQuery)
+            // While searching, relevance order wins over the running-first order below,
+            // so the best match for "wx" stays at the top even when another app is running.
+            let rankedIDs = searchResults(for: trimmedQuery, limit: Int.max).map(\.id)
+            let visible = Dictionary(uniqueKeysWithValues: result.map { ($0.id, $0) })
+            let ranked = rankedIDs.compactMap { visible[$0] }
+            if runningOnly && selection != .running {
+                return ranked.filter(\.isRunning)
             }
+            return ranked
         }
+
         if runningOnly && selection != .running {
             result = result.filter(\.isRunning)
         }
@@ -365,6 +383,34 @@ final class LauncherStore: ObservableObject {
         return result.sorted { lhs, rhs in
             if lhs.isRunning != rhs.isRunning { return lhs.isRunning }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    /// Ranked search across every discovered app.
+    /// Matches the name, the pinyin spelling, the initials, and loose subsequences.
+    func searchResults(for query: String, limit: Int = 40) -> [AppItem] {
+        let scored: [(AppItem, Int)] = apps.compactMap { app in
+            guard let score = SearchMatcher.score(app.searchTokens, query: query) else { return nil }
+            return (app, score)
+        }
+
+        let sorted = scored.sorted { lhs, rhs in
+            if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+            if lhs.0.isRunning != rhs.0.isRunning { return lhs.0.isRunning }
+            return lhs.0.name.localizedCaseInsensitiveCompare(rhs.0.name) == .orderedAscending
+        }
+
+        return Array(sorted.prefix(limit).map(\.0))
+    }
+
+    /// Shows a short confirmation in the footer and clears it a few seconds later.
+    func note(_ message: String) {
+        statusMessage = message
+        statusClearTask?.cancel()
+        statusClearTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.statusMessage = nil
         }
     }
 
@@ -397,27 +443,33 @@ final class LauncherStore: ObservableObject {
             persistState()
         }
 
-        let runningPaths = runningApplicationPaths()
+        let running = runningProcesses()
         discovered = discovered.map { app in
             var updated = app
-            updated.isRunning = runningPaths.contains(app.path)
+            updated.isRunning = running.paths.contains(app.path)
             return updated
         }
 
         apps = discovered
         lastUpdated = Date()
         isLoading = false
+
+        // Usage data is read in the background so the grid stays responsive.
+        metrics.measure(paths: discovered.map(\.path))
+        metrics.updateMemory(running.processes.filter { running.paths.contains($0.path) })
     }
 
     /// Refresh only process state so a five-second timer does not repeatedly walk the file system.
     func refreshRunningState() {
-        let runningPaths = runningApplicationPaths()
+        let running = runningProcesses()
         apps = apps.map { app in
             var updated = app
-            updated.isRunning = runningPaths.contains(app.path)
+            updated.isRunning = running.paths.contains(app.path)
             return updated
         }
         lastUpdated = Date()
+
+        metrics.updateMemory(running.processes.filter { running.paths.contains($0.path) })
     }
 
     /// Ask Launch Services to open a discovered bundle.
@@ -521,6 +573,33 @@ final class LauncherStore: ObservableObject {
         persistState()
     }
 
+    /// Adds bundle paths dropped onto a sidebar group. Anything that is not an existing
+    /// `.app` bundle is ignored, so dropped text cannot create broken entries.
+    func addApps(_ paths: [String], to groupID: UUID) {
+        guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        var addedCount = 0
+
+        for path in paths {
+            guard path.hasSuffix(".app"), FileManager.default.fileExists(atPath: path) else { continue }
+            guard let item = AppDiscoveryService.item(for: URL(fileURLWithPath: path)) else { continue }
+
+            if !apps.contains(where: { $0.path == item.path }) {
+                apps.append(item)
+            }
+            if !groups[groupIndex].appPaths.contains(where: { normalizePath($0) == item.path }) {
+                groups[groupIndex].appPaths.append(item.path)
+                addedCount += 1
+            }
+        }
+
+        guard addedCount > 0 else { return }
+
+        apps.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        metrics.measure(paths: apps.map(\.path))
+        persistState()
+        note("已把 \(addedCount) 个应用加入“\(groups[groupIndex].name)”")
+    }
+
     /// Restore groups from the current user's defaults, falling back to the built-in set.
     private func loadState() {
         guard let data = UserDefaults.standard.data(forKey: stateKey),
@@ -559,11 +638,19 @@ final class LauncherStore: ObservableObject {
         }
     }
 
-    private func runningApplicationPaths() -> Set<String> {
-        // NSWorkspace gives us the current launch state without polling individual processes.
-        Set(NSWorkspace.shared.runningApplications.compactMap { application in
-            application.bundleURL?.standardizedFileURL.path
-        })
+    /// Bundle paths paired with pids, so card footers can show both size and memory.
+    private func runningProcesses() -> (paths: Set<String>, processes: [(path: String, pid: Int32)]) {
+        var paths: Set<String> = []
+        var processes: [(path: String, pid: Int32)] = []
+
+        for application in NSWorkspace.shared.runningApplications {
+            guard let bundleURL = application.bundleURL else { continue }
+            let path = bundleURL.standardizedFileURL.path
+            paths.insert(path)
+            processes.append((path, application.processIdentifier))
+        }
+
+        return (paths, processes)
     }
 
     private func normalizePath(_ path: String) -> String {

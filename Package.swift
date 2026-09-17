@@ -13,7 +13,11 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "AppShelf",
-            path: "Sources/AppShelf"
+            path: "Sources/AppShelf",
+            // Carbon provides the global hotkey API used by the Spotlight-style panel.
+            linkerSettings: [
+                .linkedFramework("Carbon")
+            ]
         )
     ],
     swiftLanguageModes: [.v5]

@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Shared colors for the launcher shell and its controls.
-private enum AppShelfPalette {
+enum AppShelfPalette {
     static let sidebar = Color(nsColor: .underPageBackgroundColor)
     static let canvas = Color(nsColor: .windowBackgroundColor)
     static let panel = Color(nsColor: .controlBackgroundColor)
@@ -204,6 +204,14 @@ struct ContentView: View {
             .buttonStyle(.borderedProminent)
             .tint(AppShelfPalette.accent)
             .controlSize(.large)
+
+            Button(action: openSystemSettings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .help("设置")
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 20)
@@ -212,23 +220,28 @@ struct ContentView: View {
     private var appGrid: some View {
         // Adaptive columns use the available window width without changing card dimensions.
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 172, maximum: 230), spacing: 14)],
+            columns: [GridItem(.adaptive(minimum: 152, maximum: 210), spacing: 12)],
             alignment: .leading,
-            spacing: 14
+            spacing: 12
         ) {
             ForEach(store.filteredApps) { app in
-                AppCard(
-                    app: app,
-                    currentGroupID: currentGroupID,
-                    onOpen: { store.launch(app) },
-                    onMove: {
-                        appToMove = app
-                    },
-                    onRemove: currentGroupID.map { groupID in
-                        { store.removeApp(app, from: groupID) }
-                    },
-                    onShowInFinder: { store.openInFinder(app) }
-                )
+                    AppCard(
+                        app: app,
+                        currentGroupID: currentGroupID,
+                        onOpen: { store.launch(app) },
+                        onMove: {
+                            appToMove = app
+                        },
+                        onRemove: currentGroupID.map { groupID in
+                            { store.removeApp(app, from: groupID) }
+                        },
+                        onShowInFinder: { store.openInFinder(app) }
+                    )
+                    // The bundle path is the drag payload; dropping it on a sidebar group adds the app.
+                    .draggable(app.path) {
+                        AppIconView(path: app.path)
+                            .frame(width: 48, height: 48)
+                    }
             }
         }
     }
@@ -272,6 +285,14 @@ struct ContentView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
 
+            if let message = store.statusMessage {
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text(message)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AppShelfPalette.accent)
+            }
+
             Spacer()
 
             Text("应用架")
@@ -312,6 +333,10 @@ struct ContentView: View {
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         urlsToAdd = panel.urls
         isShowingAddSheet = true
+    }
+
+    private func openSystemSettings() {
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 }
 
@@ -379,7 +404,8 @@ struct SidebarView: View {
                                 symbol: group.symbol,
                                 tint: group.color,
                                 count: store.count(for: .group(group.id)),
-                                isSelected: store.selection == .group(group.id)
+                                isSelected: store.selection == .group(group.id),
+                                isDropTarget: store.highlightedGroupID == group.id
                             ) {
                                 store.selection = .group(group.id)
                             }
@@ -390,6 +416,13 @@ struct SidebarView: View {
                                 Button("删除分组", systemImage: "trash", role: .destructive) {
                                     onDeleteGroup(group)
                                 }
+                            }
+                            // Dragging an app card onto a group adds it to that group.
+                            .dropDestination(for: String.self) { paths, _ in
+                                store.addApps(paths, to: group.id)
+                                return true
+                            } isTargeted: { isTargeted in
+                                store.highlightedGroupID = isTargeted ? group.id : nil
                             }
                         }
                     }
@@ -476,7 +509,26 @@ private struct SidebarRow: View {
     let tint: Color
     let count: Int
     let isSelected: Bool
+    let isDropTarget: Bool
     let action: () -> Void
+
+    init(
+        title: String,
+        symbol: String,
+        tint: Color,
+        count: Int,
+        isSelected: Bool,
+        isDropTarget: Bool = false,
+        action: @escaping () -> Void
+    ) {
+        self.title = title
+        self.symbol = symbol
+        self.tint = tint
+        self.count = count
+        self.isSelected = isSelected
+        self.isDropTarget = isDropTarget
+        self.action = action
+    }
 
     var body: some View {
         Button(action: action) {
@@ -500,15 +552,24 @@ private struct SidebarRow: View {
             .padding(.horizontal, 10)
             .frame(height: 34)
             .background {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.white.opacity(0.78))
-                        .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
-                }
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(backgroundOpacity == 0 ? Color.clear : Color.white.opacity(backgroundOpacity))
+                    .shadow(color: .black.opacity(isSelected && !isDropTarget ? 0.04 : 0), radius: 2, y: 1)
+                    .overlay {
+                        if isDropTarget {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(AppShelfPalette.accent, lineWidth: 2)
+                        }
+                    }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private var backgroundOpacity: Double {
+        if isDropTarget { return 0.9 }
+        return isSelected ? 0.78 : 0
     }
 }
 
@@ -541,7 +602,7 @@ private struct ToolRow: View {
     }
 }
 
-/// A fixed-size app tile. Opening is the primary action; less common actions live in its menu.
+/// A compact app tile. Opening is the primary action; less common actions live in its menu.
 private struct AppCard: View {
     let app: AppItem
     let currentGroupID: UUID?
@@ -550,6 +611,7 @@ private struct AppCard: View {
     let onRemove: (() -> Void)?
     let onShowInFinder: () -> Void
 
+    @ObservedObject private var metrics = AppMetrics.shared
     @State private var isHovering = false
 
     var body: some View {
@@ -574,16 +636,23 @@ private struct AppCard: View {
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             cardTop
-            Spacer(minLength: 12)
-            Text(app.name)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+
+            Spacer(minLength: 6)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(app.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                usageLine
+            }
+
             cardFooter
         }
-        .padding(15)
-        .frame(maxWidth: .infinity, minHeight: 156, maxHeight: 156, alignment: .topLeading)
+        .padding(11)
+        .frame(maxWidth: .infinity, minHeight: 124, maxHeight: 124, alignment: .topLeading)
         .background(cardBackground)
         .overlay(cardBorder)
         .shadow(color: .black.opacity(isHovering ? 0.09 : 0.035), radius: isHovering ? 9 : 3, y: isHovering ? 4 : 1)
@@ -591,36 +660,51 @@ private struct AppCard: View {
     }
 
     private var cardTop: some View {
-        HStack(alignment: .top) {
+        HStack(alignment: .top, spacing: 6) {
             AppIconView(path: app.path)
-                .frame(width: 62, height: 62)
+                .frame(width: 40, height: 40)
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
 
             if app.isRunning {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(AppShelfPalette.success)
-                        .frame(width: 6, height: 6)
-                    Text("运行中")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(AppShelfPalette.success)
-                }
-                .padding(.horizontal, 7)
-                .padding(.vertical, 4)
-                .background(AppShelfPalette.success.opacity(0.10), in: Capsule())
+                Circle()
+                    .fill(AppShelfPalette.success)
+                    .frame(width: 6, height: 6)
+                    .padding(.top, 4)
             }
         }
+    }
+
+    /// Disk usage is always shown; memory replaces the second slot while the app runs.
+    private var usageLine: some View {
+        HStack(spacing: 5) {
+            Text(metrics.sizeText(for: app.path))
+                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
+
+            if app.isRunning {
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                HStack(spacing: 3) {
+                    Image(systemName: "memorychip")
+                        .font(.system(size: 8.5, weight: .semibold))
+                    Text(metrics.memoryText(for: app.path))
+                }
+                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                .foregroundStyle(AppShelfPalette.success)
+            }
+        }
+        .lineLimit(1)
     }
 
     private var cardFooter: some View {
         HStack(spacing: 6) {
             Text(app.category)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(.secondary)
             Spacer()
             Image(systemName: isHovering ? "arrow.up.right.circle.fill" : "arrow.up.right")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(isHovering ? AppShelfPalette.accent : Color.secondary.opacity(0.48))
         }
         .padding(.top, 5)
