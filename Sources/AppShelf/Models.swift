@@ -343,7 +343,12 @@ enum AppDiscoveryService {
 /// Owns the discovered app snapshots and the user-editable group state for the window.
 @MainActor
 final class LauncherStore: ObservableObject {
-    @Published private(set) var apps: [AppItem] = []
+    @Published private(set) var apps: [AppItem] = [] {
+        didSet {
+            // Lookups happen once per scan rather than once per card per redraw.
+            appLookup = Dictionary(uniqueKeysWithValues: apps.map { ($0.path, $0) })
+        }
+    }
     @Published private(set) var groups: [AppGroup] = []
     @Published var selection: ShelfSelection = .all
     @Published var query = ""
@@ -359,6 +364,7 @@ final class LauncherStore: ObservableObject {
 
 
     private let stateKey = "AppShelf.state.v2"
+    private var appLookup: [String: AppItem] = [:]
     private var statusClearTask: Task<Void, Never>?
     private var loadedPersistedState = false
 
@@ -390,7 +396,16 @@ final class LauncherStore: ObservableObject {
         }
     }
 
+    /// Same filtering as `filteredApps` without the sort, for counts in the header.
+    var filteredCount: Int {
+        applyingFilters().count
+    }
+
     var filteredApps: [AppItem] {
+        applyingFilters()
+    }
+
+    private func applyingFilters() -> [AppItem] {
         var result: [AppItem]
         // Apply the sidebar selection first, then the text and running-state filters.
         switch selection {
@@ -656,9 +671,28 @@ final class LauncherStore: ObservableObject {
 
     /// Remove a path from one group; the app remains available in All Apps.
     func removeApp(_ app: AppItem, from groupID: UUID) {
+        removeApp(app.path, from: groupID)
+    }
+
+    /// Removes the app from a group by path, and reports the change in the footer.
+    func removeApp(_ path: String, from groupID: UUID) {
         guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        groups[groupIndex].appPaths.removeAll { normalizePath($0) == app.path }
+        let before = groups[groupIndex].appPaths.count
+        groups[groupIndex].appPaths.removeAll { normalizePath($0) == path }
+        guard groups[groupIndex].appPaths.count != before else { return }
         persistState()
+        note("已移出“\(groups[groupIndex].name)”")
+    }
+
+    /// Every group this app currently belongs to, used by the card's context menu.
+    func groupMembership() -> [String: [AppGroup]] {
+        var membership: [String: [AppGroup]] = [:]
+        for group in groups {
+            for path in group.appPaths {
+                membership[normalizePath(path), default: []].append(group)
+            }
+        }
+        return membership
     }
 
     /// Adds bundle paths dropped onto a sidebar group. Anything that is not an existing
@@ -703,8 +737,7 @@ final class LauncherStore: ObservableObject {
     /// Apps of one group in the order the user arranged them.
     func orderedApps(in groupID: UUID) -> [AppItem] {
         let order = groups.first { $0.id == groupID }?.appPaths.map(normalizePath) ?? []
-        let lookup = Dictionary(uniqueKeysWithValues: apps.map { ($0.path, $0) })
-        return order.compactMap { lookup[$0] }
+        return order.compactMap { appLookup[$0] }
     }
 
     /// Apps that are not part of any group.

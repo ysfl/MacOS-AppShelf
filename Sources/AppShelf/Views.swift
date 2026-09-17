@@ -43,6 +43,75 @@ final class DragHighlight: ObservableObject {
     }
 }
 
+/// Plays a short "the app went into this group" animation at the drop destination.
+///
+/// Without it a card simply vanishes from its old section the moment the mouse is
+/// released, which reads as a glitch rather than as a move.
+final class DropAnimator: ObservableObject {
+    static let shared = DropAnimator()
+
+    /// Bumped on every drop so the destination can replay the animation.
+    @Published var token = 0
+    @Published var groupID: UUID?
+    @Published var path: String?
+
+    func play(groupID: UUID, path: String? = nil) {
+        self.groupID = groupID
+        self.path = path
+        token += 1
+    }
+
+    func finish() {
+        groupID = nil
+        path = nil
+    }
+}
+
+/// Shrinking ghost of the dropped app, shown on the group that received it.
+private struct DropPulse: View {
+    @ObservedObject private var animator = DropAnimator.shared
+    let groupID: UUID
+
+    @State private var scale: CGFloat = 1
+    @State private var opacity: Double = 0
+
+    var body: some View {
+        ZStack {
+            if animator.groupID == groupID {
+                Group {
+                    if let path = animator.path {
+                        Image(nsImage: IconCache.shared.image(for: path))
+                            .resizable()
+                            .interpolation(.high)
+                    } else {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(AppShelfPalette.accent.opacity(0.35))
+                    }
+                }
+                .frame(width: 62, height: 62)
+                .scaleEffect(scale)
+                .opacity(opacity)
+                .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                .onAppear(perform: play)
+                .onChange(of: animator.token, initial: false) { _, _ in play() }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func play() {
+        scale = 1.1
+        opacity = 1
+        withAnimation(.easeOut(duration: 0.34)) {
+            scale = 0.22
+            opacity = 0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
+            animator.finish()
+        }
+    }
+}
+
 /// What is being dragged: an app card, a group, or a quick tool tile.
 private struct ShelfDragItem: Codable, Transferable {
     enum Kind: String, Codable {
@@ -332,7 +401,7 @@ struct ContentView: View {
                         .foregroundStyle(.primary)
                 }
 
-                Text("\(store.filteredApps.count) 个应用 · \(store.count(for: .running)) 个正在运行")
+                Text("\(store.filteredCount) 个应用 · \(store.count(for: .running)) 个正在运行")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -375,10 +444,12 @@ struct ContentView: View {
     }
 
     private var appGrid: some View {
+        let membership = store.groupMembership()
+
         // Adaptive columns use the available window width without changing tile sizes.
-        LazyVGrid(columns: appGridColumns, alignment: .leading, spacing: 16) {
+        return LazyVGrid(columns: appGridColumns, alignment: .leading, spacing: 16) {
             ForEach(store.filteredApps) { app in
-                appCard(app, sectionGroupID: nil)
+                appCard(app, sectionGroupID: nil, removableGroups: membership[app.path] ?? [])
             }
         }
     }
@@ -391,39 +462,70 @@ struct ContentView: View {
     /// While a group is being dragged every block is outlined, and the one under the
     /// cursor is filled, so the drop target is obvious without reading any hint text.
     private var sectionedApps: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        let membership = store.groupMembership()
+
+        return VStack(alignment: .leading, spacing: 18) {
             ForEach(appSections) { section in
-                VStack(alignment: .leading, spacing: 10) {
-                    sectionHeader(section)
+                sectionBlock(section, membership: membership)
+            }
+        }
+    }
 
-                    LazyVGrid(columns: appGridColumns, alignment: .leading, spacing: 16) {
-                        ForEach(section.apps) { app in
-                            appCard(app, sectionGroupID: section.groupID)
-                        }
-                    }
-                }
-                .padding(10)
-                // Only this small view watches the drag state, so highlighting a
-                // section never rebuilds the cards inside it.
-                .background { SectionDropHighlight(groupID: section.groupID) }
-                // The whole block accepts drops: group reordering and filing an app into
-                // this group both work anywhere inside it, not only on the heading.
-                .dropDestination(for: ShelfDragItem.self) { items, _ in
-                    guard let groupID = section.groupID else { return false }
+    @ViewBuilder
+    private func sectionBlock(_ section: AppSection, membership: [String: [AppGroup]]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(section)
 
-                    if let dragged = items.first(where: { $0.kind == .group })?.groupID {
-                        store.moveGroup(dragged, before: groupID)
-                        return true
-                    }
-
-                    let paths = items.filter(\.isAppPath).map(\.value)
-                    guard !paths.isEmpty else { return false }
-                    store.addApps(paths, to: groupID)
-                    return true
-                } isTargeted: { isTargeted in
-                    highlight.sectionTargetID = isTargeted ? section.groupID : nil
+            LazyVGrid(columns: appGridColumns, alignment: .leading, spacing: 16) {
+                ForEach(section.apps) { app in
+                    appCard(app, sectionGroupID: section.groupID, removableGroups: membership[app.path] ?? [])
                 }
             }
+
+        }
+        .padding(10)
+        // Only this small view watches the drag state, so highlighting a
+        // section never rebuilds the cards inside it.
+        .background { SectionDropHighlight(groupID: section.groupID) }
+        .overlay {
+            if let groupID = section.groupID {
+                DropPulse(groupID: groupID)
+            }
+        }
+        // Floats over the bottom of the block rather than pushing the grid around,
+        // so appearing and disappearing never triggers a relayout mid-drag.
+        .overlay(alignment: .bottom) {
+            if let groupID = section.groupID {
+                RemoveFromGroupStrip(
+                    groupID: groupID,
+                    onRemove: { paths in
+                        paths.forEach { store.removeApp($0, from: groupID) }
+                        DropAnimator.shared.play(groupID: groupID, path: paths.first)
+                    },
+                    onMoveGroup: { dragged in
+                        store.moveGroup(dragged, before: groupID)
+                    }
+                )
+                .padding(10)
+            }
+        }
+        // The whole block accepts drops: group reordering and filing an app into
+        // this group both work anywhere inside it, not only on the heading.
+        .dropDestination(for: ShelfDragItem.self) { items, _ in
+            guard let groupID = section.groupID else { return false }
+
+            if let dragged = items.first(where: { $0.kind == .group })?.groupID {
+                store.moveGroup(dragged, before: groupID)
+                return true
+            }
+
+            let paths = items.filter(\.isAppPath).map(\.value)
+            guard !paths.isEmpty else { return false }
+            store.addApps(paths, to: groupID)
+            DropAnimator.shared.play(groupID: groupID, path: paths.first)
+            return true
+        } isTargeted: { isTargeted in
+            highlight.sectionTargetID = isTargeted ? section.groupID : nil
         }
     }
 
@@ -521,17 +623,23 @@ struct ContentView: View {
 
     /// One card plus its drag behaviour. `sectionGroupID` enables drag-to-reorder
     /// inside that group; it stays nil for search results, which are ranked instead.
-    private func appCard(_ app: AppItem, sectionGroupID: UUID?) -> some View {
-        AppCard(
+    ///
+    /// Cards outside a section carry no drop target at all: hundreds of registered
+    /// drop targets slow every mouse move during a drag.
+    @ViewBuilder
+    private func appCard(_ app: AppItem, sectionGroupID: UUID?, removableGroups: [AppGroup]) -> some View {
+        let card = AppCard(
             app: app,
             currentGroupID: currentGroupID,
             showsCategory: sectionGroupID == nil,
+            removableGroups: removableGroups,
             onOpen: { store.launch(app) },
             onMove: {
                 appToMove = app
             },
-            onRemove: currentGroupID.map { groupID in
-                { store.removeApp(app, from: groupID) }
+            onRemoveFromGroup: { group in
+                store.removeApp(app, from: group.id)
+                DropAnimator.shared.play(groupID: group.id)
             },
             onShowInFinder: { store.openInFinder(app) },
             onQuit: app.isRunning ? { store.terminate(app) } : nil,
@@ -543,28 +651,33 @@ struct ContentView: View {
             AppIconView(path: app.path)
                 .frame(width: 64, height: 64)
         }
-        .dropDestination(for: ShelfDragItem.self) { items, _ in
-            // A quick tool dropped anywhere outside its row is removed.
-            if let tool = items.first(where: { $0.kind == .quickTool }) {
-                quickTools.remove(tool.value)
-                store.note("已从快捷工具移除")
-                return true
-            }
 
-            guard let sectionGroupID else { return false }
+        if let sectionGroupID {
+            card
+                .dropDestination(for: ShelfDragItem.self) { items, _ in
+                    // A quick tool dropped anywhere outside its row is removed.
+                    if let tool = items.first(where: { $0.kind == .quickTool }) {
+                        quickTools.remove(tool.value)
+                        store.note("已从快捷工具移除")
+                        return true
+                    }
 
-            // Dropping another group on a card reorders that group ahead of this one.
-            if let groupID = items.first(where: { $0.kind == .group })?.groupID {
-                store.moveGroup(groupID, before: sectionGroupID)
-                return true
-            }
+                    // Dropping another group on a card reorders that group ahead of this one.
+                    if let groupID = items.first(where: { $0.kind == .group })?.groupID {
+                        store.moveGroup(groupID, before: sectionGroupID)
+                        return true
+                    }
 
-            // Dropping an app here reorders it, or files it into this group from outside.
-            let paths = items.filter(\.isAppPath).map(\.value)
-            guard !paths.isEmpty else { return false }
-            store.moveApps(paths, before: app, in: sectionGroupID)
-            return true
-        } isTargeted: { _ in }
+                    // Dropping an app here reorders it, or files it into this group from outside.
+                    let paths = items.filter(\.isAppPath).map(\.value)
+                    guard !paths.isEmpty else { return false }
+                    store.moveApps(paths, before: app, in: sectionGroupID)
+                    DropAnimator.shared.play(groupID: sectionGroupID, path: paths.first)
+                    return true
+                } isTargeted: { _ in }
+        } else {
+            card
+        }
     }
 
     /// Sections are only used when no search text is active; searching ranks across everything.
@@ -758,10 +871,13 @@ private struct SidebarGroups: View {
                     let paths = items.filter(\.isAppPath).map(\.value)
                     guard !paths.isEmpty else { return false }
                     store.addApps(paths, to: group.id)
+                    DropAnimator.shared.play(groupID: group.id, path: paths.first)
                     return true
                 } isTargeted: { isTargeted in
                     highlight.sidebarGroupID = isTargeted ? group.id : nil
                 }
+                // The dropped app shrinks into the row instead of simply vanishing.
+                .overlay { DropPulse(groupID: group.id) }
             }
         }
     }
@@ -1024,9 +1140,11 @@ private struct AppCard: View {
     let currentGroupID: UUID?
     /// False inside a group section, where the heading already says the category.
     let showsCategory: Bool
+    /// Groups this app belongs to, offered in the menu so grouping can be undone.
+    let removableGroups: [AppGroup]
     let onOpen: () -> Void
     let onMove: () -> Void
-    let onRemove: (() -> Void)?
+    let onRemoveFromGroup: (AppGroup) -> Void
     let onShowInFinder: () -> Void
     let onQuit: (() -> Void)?
     let onForceQuit: (() -> Void)?
@@ -1042,10 +1160,24 @@ private struct AppCard: View {
         .contextMenu {
             Button("打开", systemImage: "arrow.up.right") { onOpen() }
             Button("加入其他分组", systemImage: "folder.badge.plus") { onMove() }
-            if let onRemove {
+
+            if !removableGroups.isEmpty {
                 Divider()
-                Button("从当前分组移除", systemImage: "minus.circle", role: .destructive) { onRemove() }
+                Menu("取消分组") {
+                    ForEach(removableGroups) { group in
+                        Button("移出“\(group.name)”", systemImage: "minus.circle") {
+                            onRemoveFromGroup(group)
+                        }
+                    }
+                    if removableGroups.count > 1 {
+                        Divider()
+                        Button("移出全部分组", systemImage: "xmark.circle", role: .destructive) {
+                            removableGroups.forEach(onRemoveFromGroup)
+                        }
+                    }
+                }
             }
+
             if let onQuit {
                 Divider()
                 Button("退出应用", systemImage: "xmark.circle") { onQuit() }
@@ -1170,6 +1302,65 @@ private struct AppIconView: View {
             .resizable()
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
+    }
+}
+
+/// A red strip at the foot of a group block. Dropping an app here takes it out of
+/// the group instead of filing it in, so grouping can be undone by dragging alone.
+private struct RemoveFromGroupStrip: View {
+    @ObservedObject private var highlight = DragHighlight.shared
+
+    let groupID: UUID
+    let onRemove: ([String]) -> Void
+    let onMoveGroup: (UUID) -> Void
+
+    @State private var isTargeted = false
+
+    var body: some View {
+        let isVisible = isTargeted || highlight.sectionTargetID == groupID
+
+        ZStack {
+            if isVisible {
+                HStack(spacing: 7) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("拖到这里，从该分组移除")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(isTargeted ? Color.white : Color.red)
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
+                .background(
+                    isTargeted ? Color.red.opacity(0.9) : Color.red.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 9)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9)
+                        .strokeBorder(
+                            Color.red.opacity(isTargeted ? 1 : 0.45),
+                            style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
+                        )
+                }
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .dropDestination(for: ShelfDragItem.self) { items, _ in
+                    if let dragged = items.first(where: { $0.kind == .group })?.groupID {
+                        onMoveGroup(dragged)
+                        return true
+                    }
+
+                    let paths = items.filter(\.isAppPath).map(\.value)
+                    guard !paths.isEmpty else { return false }
+                    onRemove(paths)
+                    return true
+                } isTargeted: { isTargeted in
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        self.isTargeted = isTargeted
+                    }
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: isVisible)
+        .allowsHitTesting(isVisible)
     }
 }
 

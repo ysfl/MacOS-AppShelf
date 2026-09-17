@@ -34,8 +34,10 @@ If you switch between Finder, Launchpad, and Spotlight to find apps, AppShelf gi
 - Tiles are laid out like Launchpad: a large icon, a centred name, and one quiet line of usage details.
 - “全部应用”按分区展示每个分组，卡片可以拖动调整组内顺序，分区标题和侧边栏分组行都可以拖动调整分组顺序。
 - The All Apps view lists one section per group. Cards can be dragged to change their position inside a group, and both the section headings and the sidebar rows can be dragged to reorder the groups themselves.
-- 右键菜单可以退出应用，或直接强制结束进程。
-- The context menu can quit an app or force-kill its process.
+- 右键菜单可以退出应用、强制结束进程，或取消应用的分组设置。
+- The context menu can quit an app, force-kill its process, or undo its group membership.
+- 拖动应用时，每个分组下方会出现红色区域，拖进去即从该分组移除；落入分组时目标位置会播放图标缩小的动画。
+- While dragging an app, each group shows a red strip at its foot: drop there to remove the app from that group. Dropping into a group plays a shrinking icon animation at the destination.
 - 快捷工具可自定义：显示、隐藏、调整顺序，也可以在“全部应用”里把应用直接拖进快捷工具区域添加、拖出到内容区移除。
 - Quick tools are customizable: show, hide, and reorder them in Settings, or drag an app into the quick tool area to pin it and drag a tile out onto the content area to remove it.
 - 搜索栏位于标题下方独立一行，进入页面或切换分组后会自动获得键盘焦点。
