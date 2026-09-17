@@ -12,9 +12,20 @@ enum AppShelfPalette {
     static let success = Color(red: 0.12, green: 0.60, blue: 0.42)
 }
 
+/// One block of cards shown under a group heading in the All Apps view.
+private struct AppSection: Identifiable {
+    let id: String
+    let title: String
+    let symbol: String
+    let tint: Color
+    let groupID: UUID?
+    let apps: [AppItem]
+}
+
 /// The main window. Sheets and alerts are kept here so child views only emit user intent.
 struct ContentView: View {
     @ObservedObject var store: LauncherStore
+    @ObservedObject private var quickTools = QuickToolStore.shared
 
     @State private var isShowingNewGroup = false
     @State private var groupBeingEdited: AppGroup?
@@ -107,11 +118,13 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if shouldShowQuickTools {
-                        quickTools
+                        quickToolsSection
                     }
 
                     if store.isLoading {
                         LoadingState()
+                    } else if !appSections.isEmpty {
+                        sectionedApps
                     } else if store.filteredApps.isEmpty {
                         EmptyState(
                             query: store.query,
@@ -225,41 +238,146 @@ struct ContentView: View {
             spacing: 10
         ) {
             ForEach(store.filteredApps) { app in
-                    AppCard(
-                        app: app,
-                        currentGroupID: currentGroupID,
-                        onOpen: { store.launch(app) },
-                        onMove: {
-                            appToMove = app
-                        },
-                        onRemove: currentGroupID.map { groupID in
-                            { store.removeApp(app, from: groupID) }
-                        },
-                        onShowInFinder: { store.openInFinder(app) }
-                    )
-                    // The bundle path is the drag payload; dropping it on a sidebar group adds the app.
-                    .draggable(app.path) {
-                        AppIconView(path: app.path)
-                            .frame(width: 48, height: 48)
-                    }
+                appCard(app, sectionGroupID: nil)
             }
         }
     }
 
-    private var quickTools: some View {
+    /// All Apps is laid out as one block per group, in the order the user arranged them.
+    private var sectionedApps: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            ForEach(appSections) { section in
+                VStack(alignment: .leading, spacing: 10) {
+                    sectionHeader(section)
+
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 196, maximum: 260), spacing: 10)],
+                        alignment: .leading,
+                        spacing: 10
+                    ) {
+                        ForEach(section.apps) { app in
+                            appCard(app, sectionGroupID: section.groupID)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func sectionHeader(_ section: AppSection) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: section.symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(section.tint)
+                .frame(width: 16)
+
+            Text(section.title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            Text("\(section.apps.count)")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(.tertiary)
+
+            Spacer(minLength: 0)
+
+            if section.groupID != nil {
+                Text("拖动卡片可调整顺序")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.bottom, 2)
+    }
+
+    /// One card plus its drag behaviour. `sectionGroupID` enables drag-to-reorder
+    /// inside that group; it stays nil for search results, which are ranked instead.
+    private func appCard(_ app: AppItem, sectionGroupID: UUID?) -> some View {
+        AppCard(
+            app: app,
+            currentGroupID: currentGroupID,
+            onOpen: { store.launch(app) },
+            onMove: {
+                appToMove = app
+            },
+            onRemove: currentGroupID.map { groupID in
+                { store.removeApp(app, from: groupID) }
+            },
+            onShowInFinder: { store.openInFinder(app) },
+            onQuit: app.isRunning ? { store.terminate(app) } : nil,
+            onForceQuit: app.isRunning ? { store.terminate(app, force: true) } : nil
+        )
+        // The bundle path is the drag payload: dropping on a sidebar group files the app,
+        // dropping on another card inside a section reorders it.
+        .draggable(app.path) {
+            AppIconView(path: app.path)
+                .frame(width: 48, height: 48)
+        }
+        .dropDestination(for: String.self) { paths, _ in
+            guard let sectionGroupID else { return false }
+            store.moveApps(paths, before: app, in: sectionGroupID)
+            return true
+        } isTargeted: { _ in }
+    }
+
+    /// Sections are only used when no search text is active; searching ranks across everything.
+    private var appSections: [AppSection] {
+        guard !store.isLoading else { return [] }
+        guard store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+
+        func visible(_ apps: [AppItem]) -> [AppItem] {
+            store.runningOnly ? apps.filter(\.isRunning) : apps
+        }
+
+        switch store.selection {
+        case .running, .ungrouped:
+            return []
+        case .group(let id):
+            let apps = visible(store.orderedApps(in: id))
+            guard !apps.isEmpty, let group = store.groups.first(where: { $0.id == id }) else { return [] }
+            return [AppSection(id: id.uuidString, title: group.name, symbol: group.symbol, tint: group.color, groupID: id, apps: apps)]
+        case .all:
+            var sections: [AppSection] = store.groups.compactMap { group in
+                let apps = visible(store.orderedApps(in: group.id))
+                guard !apps.isEmpty else { return nil }
+                return AppSection(
+                    id: group.id.uuidString,
+                    title: group.name,
+                    symbol: group.symbol,
+                    tint: group.color,
+                    groupID: group.id,
+                    apps: apps
+                )
+            }
+            let ungrouped = visible(store.ungroupedApps())
+            if !ungrouped.isEmpty {
+                sections.append(
+                    AppSection(id: "ungrouped", title: "未分组", symbol: "tray", tint: .secondary, groupID: nil, apps: ungrouped)
+                )
+            }
+            return sections
+        }
+    }
+
+    private var quickToolsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text("快捷工具")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("点击即可打开")
+                Text("点击即可打开，可在设置中调整")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }
 
-            HStack(spacing: 10) {
-                ForEach(Array(QuickTool.allCases.prefix(4))) { tool in
+            // A grid instead of a single row so any number of tools stays inside the window.
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 150, maximum: 230), spacing: 10)],
+                alignment: .leading,
+                spacing: 10
+            ) {
+                ForEach(quickTools.items) { tool in
                     QuickToolTile(tool: tool) {
                         store.launch(tool)
                     }
@@ -343,10 +461,11 @@ struct ContentView: View {
 /// Navigation for built-in views, user groups, and the small utility list.
 struct SidebarView: View {
     @ObservedObject var store: LauncherStore
+    @ObservedObject private var quickTools = QuickToolStore.shared
     let onNewGroup: () -> Void
     let onEditGroup: (AppGroup) -> Void
     let onDeleteGroup: (AppGroup) -> Void
-    let onLaunchTool: (QuickTool) -> Void
+    let onLaunchTool: (QuickToolItem) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -429,7 +548,7 @@ struct SidebarView: View {
 
                     VStack(alignment: .leading, spacing: 5) {
                         SidebarSectionLabel("快捷工具")
-                        ForEach(QuickTool.allCases) { tool in
+                        ForEach(quickTools.items) { tool in
                             ToolRow(tool: tool) {
                                 onLaunchTool(tool)
                             }
@@ -581,15 +700,13 @@ private struct SidebarRow: View {
 
 /// A sidebar shortcut that delegates launching to the store owner.
 private struct ToolRow: View {
-    let tool: QuickTool
+    let tool: QuickToolItem
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: tool.symbol)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+                toolIcon
                     .frame(width: 18)
                 Text(tool.title)
                     .font(.system(size: 12, weight: .medium))
@@ -606,6 +723,19 @@ private struct ToolRow: View {
         .buttonStyle(.plain)
         .help("打开\(tool.title)")
     }
+
+    @ViewBuilder
+    private var toolIcon: some View {
+        if let symbol = tool.symbol {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+        } else if let path = tool.path {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                .resizable()
+                .interpolation(.high)
+        }
+    }
 }
 
 /// A compact app tile. Opening is the primary action; less common actions live in its menu.
@@ -616,6 +746,8 @@ private struct AppCard: View {
     let onMove: () -> Void
     let onRemove: (() -> Void)?
     let onShowInFinder: () -> Void
+    let onQuit: (() -> Void)?
+    let onForceQuit: (() -> Void)?
 
     @ObservedObject private var metrics = AppMetrics.shared
     @State private var isHovering = false
@@ -633,6 +765,13 @@ private struct AppCard: View {
                 Divider()
                 Button("从当前分组移除", systemImage: "minus.circle", role: .destructive) { onRemove() }
             }
+            if let onQuit {
+                Divider()
+                Button("退出应用", systemImage: "xmark.circle") { onQuit() }
+                if let onForceQuit {
+                    Button("强制结束", systemImage: "exclamationmark.octagon", role: .destructive) { onForceQuit() }
+                }
+            }
             Divider()
             Button("在 Finder 中显示", systemImage: "folder") { onShowInFinder() }
         }
@@ -643,15 +782,33 @@ private struct AppCard: View {
     /// instead of an icon floating over empty space.
     private var cardContent: some View {
         HStack(alignment: .center, spacing: 12) {
-            AppIconView(path: app.path)
-                .frame(width: 58, height: 58)
+            // Running state sits on the icon, so the right side stays free for text.
+            ZStack(alignment: .topTrailing) {
+                AppIconView(path: app.path)
+                    .frame(width: 58, height: 58)
+
+                if app.isRunning {
+                    Circle()
+                        .fill(AppShelfPalette.success)
+                        .frame(width: 9, height: 9)
+                        .overlay {
+                            Circle()
+                                .strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5)
+                        }
+                        .offset(x: 3, y: -2)
+                }
+            }
+            .frame(width: 58, height: 58)
 
             VStack(alignment: .leading, spacing: 6) {
+                // Long names wrap to a second line instead of being cut off.
                 Text(app.name)
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 5) {
                     categoryChip
@@ -663,29 +820,15 @@ private struct AppCard: View {
                 .lineLimit(1)
             }
 
-            Spacer(minLength: 4)
-
-            VStack(alignment: .trailing, spacing: 8) {
-                if app.isRunning {
-                    Circle()
-                        .fill(AppShelfPalette.success)
-                        .frame(width: 7, height: 7)
-                } else {
-                    Color.clear.frame(width: 7, height: 7)
-                }
-
-                Image(systemName: isHovering ? "arrow.up.right.circle.fill" : "arrow.up.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(isHovering ? AppShelfPalette.accent : Color.secondary.opacity(0.45))
-            }
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, minHeight: 88, maxHeight: 88, alignment: .leading)
         .background(cardBackground)
         .overlay(cardBorder)
         .shadow(color: .black.opacity(isHovering ? 0.09 : 0.035), radius: isHovering ? 9 : 3, y: isHovering ? 4 : 1)
-        .scaleEffect(isHovering ? 1.012 : 1)
+        .scaleEffect(isHovering ? 1.015 : 1)
     }
 
     private var categoryChip: some View {
@@ -718,13 +861,18 @@ private struct AppCard: View {
     }
 
     private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 8)
+        RoundedRectangle(cornerRadius: 9)
             .fill(AppShelfPalette.panel.opacity(isHovering ? 1 : 0.72))
     }
 
+    /// The outline uses the system separator color so it stays visible but quiet
+    /// in both light and dark mode, and turns into the accent color on hover.
     private var cardBorder: some View {
-        RoundedRectangle(cornerRadius: 8)
-            .stroke(isHovering ? AppShelfPalette.accent.opacity(0.32) : AppShelfPalette.border, lineWidth: 1)
+        RoundedRectangle(cornerRadius: 9)
+            .strokeBorder(
+                isHovering ? AppShelfPalette.accent.opacity(0.5) : Color(nsColor: .separatorColor),
+                lineWidth: isHovering ? 1.5 : 1
+            )
     }
 }
 
@@ -743,15 +891,13 @@ private struct AppIconView: View {
 
 /// A larger shortcut tile shown above the full app grid.
 private struct QuickToolTile: View {
-    let tool: QuickTool
+    let tool: QuickToolItem
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: tool.symbol)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(AppShelfPalette.accent)
+                toolIcon
                     .frame(width: 29, height: 29)
                     .background(AppShelfPalette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
 
@@ -779,6 +925,20 @@ private struct QuickToolTile: View {
         }
         .buttonStyle(.plain)
         .help("打开\(tool.title)")
+    }
+
+    /// Built-in utilities keep their SF Symbol; user-added tools show their own icon.
+    @ViewBuilder
+    private var toolIcon: some View {
+        if let symbol = tool.symbol {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(AppShelfPalette.accent)
+        } else if let path = tool.path {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                .resizable()
+                .interpolation(.high)
+        }
     }
 }
 

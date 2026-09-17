@@ -28,8 +28,14 @@ If you switch between Finder, Launchpad, and Spotlight to find apps, AppShelf gi
 - App cards can be dragged onto a sidebar group to file them; the group count updates immediately.
 - 搜索支持中文拼音首字母、全拼和英文缩写，并按相关度排序。输入“wx”可找到微信，“vsc”可找到 Visual Studio Code。
 - Search understands Chinese pinyin initials, full pinyin, and English acronyms, ranked by relevance. Typing "wx" finds 微信 and "vsc" finds Visual Studio Code.
-- 卡片显示磁盘占用（如 `1.2 GB`、`256 MB`）；运行中的应用同时显示实时内存占用（如 `512 M`）。
-- Each card shows its disk usage (e.g. `1.2 GB`, `256 MB`); running apps also show live memory usage (e.g. `512 M`).
+- 卡片显示磁盘占用（如 `1.2 GB`、`256 MB`）；运行中的应用在图标上加运行标记，并显示实时内存占用（如 `512 M`）。过长的名称自动换行而不是截断。
+- Each card shows its disk usage (e.g. `1.2 GB`, `256 MB`); running apps get a badge on the icon plus live memory usage (e.g. `512 M`). Long names wrap instead of being truncated.
+- “全部应用”按分区展示每个分组，卡片可以直接拖动调整组内顺序。
+- The All Apps view lists one section per group, and cards can be dragged to change their position inside a group.
+- 右键菜单可以退出应用，或直接强制结束进程。
+- The context menu can quit an app or force-kill its process.
+- 快捷工具可自定义：显示、隐藏、调整顺序，也能把任意应用加为快捷工具。
+- Quick tools are customizable: show, hide, reorder, and pin any app as a quick tool.
 - 在 Dock 图标上右键，可以直接打开聚焦搜索、应用架窗口、任意分组或设置。
 - Right-clicking the Dock icon opens focus search, the app window, any group, or the settings panel.
 - 支持类似 macOS 聚焦的独立搜索浮层：用快捷键唤出，输入后回车直接打开应用，不显示完整主界面。
@@ -106,6 +112,8 @@ hdiutil verify release/AppShelf-1.0.0.dmg
 - `Sources/AppShelf/SearchMatching.swift`: pinyin conversion plus initials and fuzzy-match scoring.
 - `Sources/AppShelf/AppMetrics.swift`：磁盘占用测量、缓存和运行中进程的内存读取。
 - `Sources/AppShelf/AppMetrics.swift`: disk usage measurement, caching, and memory reads for running processes.
+- `Sources/AppShelf/QuickTools.swift`：快捷工具的条目模型与显示、排序、增删的持久化。
+- `Sources/AppShelf/QuickTools.swift`: the quick tool model plus persistence for visibility, order, and additions.
 - `Sources/AppShelf/HotKey.swift`：全局快捷键的 Carbon 注册与偏好设置存储。
 - `Sources/AppShelf/HotKey.swift`: Carbon registration of the global shortcut and its persisted preference.
 - `Sources/AppShelf/SpotlightPanel.swift`：聚焦式浮动搜索面板及其 AppKit 窗口。

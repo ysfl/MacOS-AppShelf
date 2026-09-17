@@ -120,6 +120,7 @@ final class SettingsWindowController: NSWindowController {
         )
         window.title = "设置"
         window.contentView = hosting
+        window.setContentSize(NSSize(width: 430, height: 640))
         window.isReleasedWhenClosed = false
         window.center()
         super.init(window: window)
@@ -139,6 +140,12 @@ final class SettingsWindowController: NSWindowController {
 /// Preferences for the search panel, the menu bar icon, and cached usage data.
 struct SettingsView: View {
     @ObservedObject private var hotKeys = HotKeyStore.shared
+    @ObservedObject private var quickTools = QuickToolStore.shared
+
+    /// Built-ins and user tools that are currently hidden from the sidebar.
+    private var hiddenTools: [QuickToolItem] {
+        quickTools.allItems.filter { !quickTools.isEnabled($0.id) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -184,6 +191,96 @@ struct SettingsView: View {
 
             GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
+                    // Visible tools follow the stored order; the arrows move one slot.
+                    ForEach(quickTools.items) { item in
+                        HStack(spacing: 8) {
+                            Image(systemName: item.symbol ?? "app.dashed")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16)
+
+                            Text(item.title)
+                                .font(.system(size: 12))
+                                .lineLimit(1)
+
+                            Spacer(minLength: 0)
+
+                            Button {
+                                quickTools.move(item.id, by: -1)
+                            } label: {
+                                Image(systemName: "arrow.up")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(quickTools.items.first?.id == item.id)
+
+                            Button {
+                                quickTools.move(item.id, by: 1)
+                            } label: {
+                                Image(systemName: "arrow.down")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(quickTools.items.last?.id == item.id)
+
+                            Button {
+                                quickTools.setEnabled(item.id, isEnabled: false)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("隐藏")
+                        }
+                    }
+
+                    if quickTools.items.isEmpty {
+                        Text("还没有显示任何快捷工具")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("添加或隐藏")
+                            .font(.system(size: 12, weight: .semibold))
+
+                        ForEach(hiddenTools) { item in
+                            HStack(spacing: 8) {
+                                Text(item.title)
+                                    .font(.system(size: 12))
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                Button("显示") {
+                                    quickTools.setEnabled(item.id, isEnabled: true)
+                                }
+                                .buttonStyle(.borderless)
+                                if item.isCustom {
+                                    Button {
+                                        if case .custom(let tool) = item {
+                                            quickTools.removeCustom(id: tool.id)
+                                        }
+                                    } label: {
+                                        Image(systemName: "trash")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help("删除")
+                                }
+                            }
+                        }
+
+                        Button("添加应用为快捷工具…", action: addQuickToolApp)
+                    }
+
+                    Text("快捷工具显示在侧边栏和“全部应用”顶部；可以把常用应用加进来。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(6)
+            } label: {
+                Text("快捷工具")
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
                     Button("重新计算磁盘占用") {
                         AppMetrics.shared.recalculate()
                     }
@@ -199,6 +296,23 @@ struct SettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(22)
-        .frame(width: 430, height: 470)
+        .frame(width: 430, height: 640)
+    }
+
+    /// Picks a bundle to pin as a quick tool, the same way apps are added to a group.
+    private func addQuickToolApp() {
+        let panel = NSOpenPanel()
+        panel.title = "添加快捷工具"
+        panel.message = "选择一个 .app"
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.resolvesAliases = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let name = (Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? url.deletingPathExtension().lastPathComponent
+        quickTools.addCustom(name: name, path: url.standardizedFileURL.path)
     }
 }

@@ -550,6 +550,44 @@ final class LauncherStore: ObservableObject {
         return false
     }
 
+    /// Quits a running app. `force` is the equivalent of `kill -9` and skips the
+    /// app's own save and confirm steps.
+    @discardableResult
+    func terminate(_ app: AppItem, force: Bool = false) -> Bool {
+        guard let running = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleURL?.standardizedFileURL.path == app.path
+        }) else {
+            errorMessage = "“\(app.name)”现在没有在运行"
+            return false
+        }
+
+        let stopped = force ? running.forceTerminate() : running.terminate()
+        if stopped {
+            refreshRunningState()
+            note(force ? "已强制结束“\(app.name)”" : "已退出“\(app.name)”")
+        } else {
+            errorMessage = "无法结束“\(app.name)”"
+        }
+        return stopped
+    }
+
+    /// Opens a quick tool entry, which is either a built-in utility or a user-picked app.
+    @discardableResult
+    func launch(_ tool: QuickToolItem) -> Bool {
+        if case .builtin(let builtin) = tool {
+            return launch(builtin)
+        }
+
+        guard let path = tool.path else { return false }
+        let success = NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        if !success {
+            errorMessage = "无法打开“\(tool.title)”"
+        } else {
+            refreshRunningState()
+        }
+        return success
+    }
+
     /// Reveal the bundle in Finder without changing its location.
     func openInFinder(_ app: AppItem) {
         NSWorkspace.shared.selectFile(app.path, inFileViewerRootedAtPath: "")
@@ -643,6 +681,44 @@ final class LauncherStore: ObservableObject {
         metrics.measure(paths: apps.map(\.path))
         persistState()
         note("已把 \(addedCount) 个应用加入“\(groups[groupIndex].name)”")
+    }
+
+    /// Apps of one group in the order the user arranged them.
+    func orderedApps(in groupID: UUID) -> [AppItem] {
+        let order = groups.first { $0.id == groupID }?.appPaths.map(normalizePath) ?? []
+        let lookup = Dictionary(uniqueKeysWithValues: apps.map { ($0.path, $0) })
+        return order.compactMap { lookup[$0] }
+    }
+
+    /// Apps that are not part of any group.
+    func ungroupedApps() -> [AppItem] {
+        let groupedPaths = Set(groups.flatMap(\.appPaths).map(normalizePath))
+        return apps
+            .filter { !groupedPaths.contains($0.path) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Drops dragged cards ahead of `target` inside one group, which both reorders
+    /// existing members and files new ones at that position.
+    func moveApps(_ draggedPaths: [String], before target: AppItem, in groupID: UUID) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        var list = groups[index].appPaths.map(normalizePath)
+        var didChange = false
+
+        for dragged in draggedPaths.map(normalizePath) {
+            guard dragged != target.path else { continue }
+            list.removeAll { $0 == dragged }
+            if let targetIndex = list.firstIndex(of: target.path) {
+                list.insert(dragged, at: targetIndex)
+            } else {
+                list.append(dragged)
+            }
+            didChange = true
+        }
+
+        guard didChange else { return }
+        groups[index].appPaths = list
+        persistState()
     }
 
     /// Restore groups from the current user's defaults, falling back to the built-in set.
