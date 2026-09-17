@@ -12,6 +12,39 @@ enum AppShelfPalette {
     static let success = Color(red: 0.12, green: 0.60, blue: 0.42)
 }
 
+extension UTType {
+    /// In-app drag types. Declaring them separately keeps an app card (plain text),
+    /// a group row, and a quick tool tile from being mistaken for one another.
+    static let appShelfGroup = UTType(exportedAs: "local.dan.AppShelf.group")
+    static let appShelfQuickTool = UTType(exportedAs: "local.dan.AppShelf.quicktool")
+}
+
+/// Payload of a dragged sidebar group or section heading.
+private struct GroupDragPayload: Codable, Transferable {
+    let id: UUID
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .appShelfGroup)
+    }
+}
+
+/// Payload of a dragged quick tool tile.
+private struct QuickToolDragPayload: Codable, Transferable {
+    let id: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .appShelfQuickTool)
+    }
+}
+
+/// App cards drag their bundle path as plain text; this filters real bundle paths out
+/// from any other text that might be dropped onto the window.
+private enum ShelfDragPayload {
+    static func isAppPath(_ payload: String) -> Bool {
+        payload.hasSuffix(".app")
+    }
+}
+
 /// One block of cards shown under a group heading in the All Apps view.
 private struct AppSection: Identifiable {
     let id: String
@@ -27,6 +60,9 @@ struct ContentView: View {
     @ObservedObject var store: LauncherStore
     @ObservedObject private var quickTools = QuickToolStore.shared
 
+    @FocusState private var isSearchFocused: Bool
+    @State private var isSectionDropTarget: UUID?
+    @State private var isQuickToolDropTarget = false
     @State private var isShowingNewGroup = false
     @State private var groupBeingEdited: AppGroup?
     @State private var groupPendingDeletion: AppGroup?
@@ -109,9 +145,11 @@ struct ContentView: View {
     }
 
     private var mainContent: some View {
-        // The header stays fixed while the grid scrolls, which keeps search and filters visible.
+        // The header and the search row stay fixed while the grid scrolls.
         VStack(alignment: .leading, spacing: 0) {
             header
+
+            searchBar
 
             Divider()
 
@@ -138,11 +176,65 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 28)
                 .padding(.vertical, 24)
+                .frame(maxWidth: .infinity, minHeight: 320, alignment: .topLeading)
+                // Dropping a quick tool here takes it out of the toolbar row.
+                .dropDestination(for: QuickToolDragPayload.self) { items, _ in
+                    guard !items.isEmpty else { return false }
+                    items.forEach { quickTools.remove($0.id) }
+                    store.note("已从快捷工具移除")
+                    return true
+                } isTargeted: { _ in }
             }
 
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear { focusSearchField() }
+        // Every page change hands the keyboard back to the search field.
+        .onChange(of: store.selection, initial: false) { _, _ in
+            focusSearchField()
+        }
+    }
+
+    /// A full-width search row under the title so there is room for longer queries.
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            TextField("搜索应用，支持拼音首字母，如 wx / vsc", text: $store.query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .focused($isSearchFocused)
+
+            if !store.query.isEmpty {
+                Button {
+                    store.query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("清除搜索")
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 36)
+        .background(AppShelfPalette.panel, in: RoundedRectangle(cornerRadius: 9))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(isSearchFocused ? AppShelfPalette.accent.opacity(0.5) : AppShelfPalette.border, lineWidth: 1)
+        }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 16)
+    }
+
+    private func focusSearchField() {
+        // A short delay lets the page finish swapping before focus is claimed.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            isSearchFocused = true
+        }
     }
 
     private var header: some View {
@@ -165,35 +257,6 @@ struct ContentView: View {
             }
 
             Spacer(minLength: 18)
-
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-
-                TextField("搜索应用", text: $store.query)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .frame(width: 180)
-
-                if !store.query.isEmpty {
-                    Button {
-                        store.query = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("清除搜索")
-                }
-            }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 8)
-            .background(AppShelfPalette.panel, in: RoundedRectangle(cornerRadius: 9))
-            .overlay {
-                RoundedRectangle(cornerRadius: 9)
-                    .stroke(AppShelfPalette.border, lineWidth: 1)
-            }
 
             Toggle(isOn: $store.runningOnly) {
                 Label("运行中", systemImage: "bolt.fill")
@@ -231,30 +294,26 @@ struct ContentView: View {
     }
 
     private var appGrid: some View {
-        // Adaptive columns use the available window width without changing card dimensions.
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 196, maximum: 260), spacing: 10)],
-            alignment: .leading,
-            spacing: 10
-        ) {
+        // Adaptive columns use the available window width without changing tile sizes.
+        LazyVGrid(columns: appGridColumns, alignment: .leading, spacing: 16) {
             ForEach(store.filteredApps) { app in
                 appCard(app, sectionGroupID: nil)
             }
         }
     }
 
+    private var appGridColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 136, maximum: 176), spacing: 14)]
+    }
+
     /// All Apps is laid out as one block per group, in the order the user arranged them.
     private var sectionedApps: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 26) {
             ForEach(appSections) { section in
                 VStack(alignment: .leading, spacing: 10) {
                     sectionHeader(section)
 
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 196, maximum: 260), spacing: 10)],
-                        alignment: .leading,
-                        spacing: 10
-                    ) {
+                    LazyVGrid(columns: appGridColumns, alignment: .leading, spacing: 16) {
                         ForEach(section.apps) { app in
                             appCard(app, sectionGroupID: section.groupID)
                         }
@@ -264,8 +323,10 @@ struct ContentView: View {
         }
     }
 
+    /// Section headings are themselves draggable, so groups can be reordered here too.
+    @ViewBuilder
     private func sectionHeader(_ section: AppSection) -> some View {
-        HStack(spacing: 8) {
+        let header = HStack(spacing: 8) {
             Image(systemName: section.symbol)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(section.tint)
@@ -282,12 +343,32 @@ struct ContentView: View {
             Spacer(minLength: 0)
 
             if section.groupID != nil {
-                Text("拖动卡片可调整顺序")
+                Text(isSectionDropTarget == section.groupID ? "放到这里" : "拖动标题或卡片可调整顺序")
                     .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(isSectionDropTarget == section.groupID ? AppShelfPalette.accent : Color.secondary.opacity(0.7))
             }
         }
-        .padding(.bottom, 2)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+
+        if let groupID = section.groupID {
+            header
+                .draggable(GroupDragPayload(id: groupID)) {
+                    Text(section.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                }
+                .dropDestination(for: GroupDragPayload.self) { items, _ in
+                    guard let dragged = items.first?.id else { return false }
+                    store.moveGroup(dragged, before: groupID)
+                    return true
+                } isTargeted: { isTargeted in
+                    isSectionDropTarget = isTargeted ? groupID : nil
+                }
+        } else {
+            header
+        }
     }
 
     /// One card plus its drag behaviour. `sectionGroupID` enables drag-to-reorder
@@ -296,6 +377,7 @@ struct ContentView: View {
         AppCard(
             app: app,
             currentGroupID: currentGroupID,
+            showsCategory: sectionGroupID == nil,
             onOpen: { store.launch(app) },
             onMove: {
                 appToMove = app
@@ -311,10 +393,13 @@ struct ContentView: View {
         // dropping on another card inside a section reorders it.
         .draggable(app.path) {
             AppIconView(path: app.path)
-                .frame(width: 48, height: 48)
+                .frame(width: 64, height: 64)
         }
-        .dropDestination(for: String.self) { paths, _ in
+        .dropDestination(for: String.self) { items, _ in
             guard let sectionGroupID else { return false }
+            // Only other app cards reorder; quick tool payloads belong to the toolbar row.
+            let paths = items.filter(ShelfDragPayload.isAppPath)
+            guard !paths.isEmpty else { return false }
             store.moveApps(paths, before: app, in: sectionGroupID)
             return true
         } isTargeted: { _ in }
@@ -366,9 +451,9 @@ struct ContentView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("点击即可打开，可在设置中调整")
+                Text(isQuickToolDropTarget ? "松手即可添加" : "拖应用进来添加，拖出去移除")
                     .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(isQuickToolDropTarget ? AppShelfPalette.accent : Color.secondary.opacity(0.7))
             }
 
             // A grid instead of a single row so any number of tools stays inside the window.
@@ -383,6 +468,28 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+        .padding(8)
+        .background {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(
+                    isQuickToolDropTarget ? AppShelfPalette.accent : Color.clear,
+                    style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
+                )
+        }
+        // Dropping an app card here pins it as a quick tool.
+        .dropDestination(for: String.self) { items, _ in
+            let paths = items.filter(ShelfDragPayload.isAppPath)
+            guard !paths.isEmpty else { return false }
+            for path in paths {
+                let name = AppDiscoveryService.item(for: URL(fileURLWithPath: path))?.name
+                    ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+                quickTools.addCustom(name: name, path: path)
+            }
+            store.note("已加入快捷工具")
+            return true
+        } isTargeted: { isTargeted in
+            isQuickToolDropTarget = isTargeted
         }
     }
 
@@ -536,8 +643,26 @@ struct SidebarView: View {
                                     onDeleteGroup(group)
                                 }
                             }
-                            // Dragging an app card onto a group adds it to that group.
-                            .dropDestination(for: String.self) { paths, _ in
+                            // The row accepts two kinds of drop: an app card (files it here)
+                            // or another group row (reorders the sidebar).
+                            .draggable(GroupDragPayload(id: group.id)) {
+                                Label(group.name, systemImage: group.symbol)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                            }
+                            // Two drop targets on one row: an app card files the app here,
+                            // another group row reorders the sidebar.
+                            .dropDestination(for: GroupDragPayload.self) { items, _ in
+                                guard let dragged = items.first?.id else { return false }
+                                store.moveGroup(dragged, before: group.id)
+                                return true
+                            } isTargeted: { isTargeted in
+                                store.highlightedGroupID = isTargeted ? group.id : nil
+                            }
+                            .dropDestination(for: String.self) { items, _ in
+                                let paths = items.filter(ShelfDragPayload.isAppPath)
+                                guard !paths.isEmpty else { return false }
                                 store.addApps(paths, to: group.id)
                                 return true
                             } isTargeted: { isTargeted in
@@ -722,6 +847,12 @@ private struct ToolRow: View {
         }
         .buttonStyle(.plain)
         .help("打开\(tool.title)")
+        .draggable(QuickToolDragPayload(id: tool.id)) {
+            Label(tool.title, systemImage: "square.dashed")
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+        }
     }
 
     @ViewBuilder
@@ -742,6 +873,8 @@ private struct ToolRow: View {
 private struct AppCard: View {
     let app: AppItem
     let currentGroupID: UUID?
+    /// False inside a group section, where the heading already says the category.
+    let showsCategory: Bool
     let onOpen: () -> Void
     let onMove: () -> Void
     let onRemove: (() -> Void)?
@@ -780,99 +913,76 @@ private struct AppCard: View {
 
     /// Icon on the left, name and usage stacked beside it, so a card reads as one row
     /// instead of an icon floating over empty space.
+    /// Launchpad-style tile: a large icon, a centred name, and one quiet info line.
     private var cardContent: some View {
-        HStack(alignment: .center, spacing: 12) {
-            // Running state sits on the icon, so the right side stays free for text.
+        VStack(spacing: 9) {
             ZStack(alignment: .topTrailing) {
                 AppIconView(path: app.path)
-                    .frame(width: 58, height: 58)
+                    .frame(width: 84, height: 84)
 
                 if app.isRunning {
                     Circle()
                         .fill(AppShelfPalette.success)
-                        .frame(width: 9, height: 9)
+                        .frame(width: 11, height: 11)
                         .overlay {
                             Circle()
-                                .strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5)
+                                .strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 2)
                         }
-                        .offset(x: 3, y: -2)
+                        .offset(x: 2, y: -2)
                 }
             }
-            .frame(width: 58, height: 58)
 
-            VStack(alignment: .leading, spacing: 6) {
-                // Long names wrap to a second line instead of being cut off.
-                Text(app.name)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+            Text(app.name)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
 
-                HStack(spacing: 5) {
-                    categoryChip
-                    sizeLabel
-                    if app.isRunning {
-                        memoryLabel
-                    }
-                }
-                .lineLimit(1)
-            }
-
-            Spacer(minLength: 0)
+            infoLine
         }
-        .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(cardBackground)
-        .overlay(cardBorder)
-        .shadow(color: .black.opacity(isHovering ? 0.09 : 0.035), radius: isHovering ? 9 : 3, y: isHovering ? 4 : 1)
-        .scaleEffect(isHovering ? 1.015 : 1)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, minHeight: 158, alignment: .top)
+        .background(hoverBackground)
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(isHovering ? 0.10 : 0), radius: 10, y: 4)
+        .scaleEffect(isHovering ? 1.02 : 1)
+        .animation(.easeOut(duration: 0.12), value: isHovering)
     }
 
-    private var categoryChip: some View {
-        Text(app.category)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Color.primary.opacity(0.07), in: Capsule())
-    }
+    /// Category, disk usage, and memory share one small line. The category is only
+    /// repeated when the tile is not already sitting inside that group's section.
+    private var infoLine: some View {
+        HStack(spacing: 4) {
+            if showsCategory {
+                Text(app.category)
+                    .foregroundStyle(.secondary)
+                Text("·")
+                    .foregroundStyle(.tertiary)
+            }
 
-    private var sizeLabel: some View {
-        Text(metrics.sizeText(for: app.path))
-            .font(.system(size: 10.5, weight: .medium, design: .rounded))
-            .foregroundStyle(.secondary)
-    }
+            Text(metrics.sizeText(for: app.path))
+                .foregroundStyle(.secondary)
 
-    /// Memory usage only appears while the app is running.
-    private var memoryLabel: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "memorychip")
-                .font(.system(size: 8.5, weight: .semibold))
-            Text(metrics.memoryText(for: app.path))
+            if app.isRunning {
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text(metrics.memoryText(for: app.path))
+                    .foregroundStyle(AppShelfPalette.success)
+            }
         }
         .font(.system(size: 10.5, weight: .medium, design: .rounded))
-        .foregroundStyle(AppShelfPalette.success)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(AppShelfPalette.success.opacity(0.12), in: Capsule())
+        .lineLimit(1)
     }
 
-    private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 9)
-            .fill(AppShelfPalette.panel.opacity(isHovering ? 1 : 0.72))
-    }
-
-    /// The outline uses the system separator color so it stays visible but quiet
-    /// in both light and dark mode, and turns into the accent color on hover.
-    private var cardBorder: some View {
-        RoundedRectangle(cornerRadius: 9)
-            .strokeBorder(
-                isHovering ? AppShelfPalette.accent.opacity(0.5) : Color(nsColor: .separatorColor),
-                lineWidth: isHovering ? 1.5 : 1
-            )
+    /// No permanent outline: the tile only gains a soft rounded surface while hovered,
+    /// so the grid stays clean and the icon and name carry the layout.
+    private var hoverBackground: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .fill(isHovering ? AppShelfPalette.panel : Color.clear)
     }
 }
 
@@ -925,6 +1035,13 @@ private struct QuickToolTile: View {
         }
         .buttonStyle(.plain)
         .help("打开\(tool.title)")
+        // Drag the tile out of the row to remove it.
+        .draggable(QuickToolDragPayload(id: tool.id)) {
+            Label(tool.title, systemImage: "square.dashed")
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+        }
     }
 
     /// Built-in utilities keep their SF Symbol; user-added tools show their own icon.

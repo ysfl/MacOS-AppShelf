@@ -683,6 +683,18 @@ final class LauncherStore: ObservableObject {
         note("已把 \(addedCount) 个应用加入“\(groups[groupIndex].name)”")
     }
 
+    /// Reorders groups, used when a sidebar row or an All Apps section header is dragged.
+    func moveGroup(_ id: UUID, before targetID: UUID) {
+        guard id != targetID,
+              let from = groups.firstIndex(where: { $0.id == id }),
+              let to = groups.firstIndex(where: { $0.id == targetID }) else { return }
+
+        let group = groups.remove(at: from)
+        // Removing the dragged row shifts every later index down by one.
+        groups.insert(group, at: from < to ? to - 1 : to)
+        persistState()
+    }
+
     /// Apps of one group in the order the user arranged them.
     func orderedApps(in groupID: UUID) -> [AppItem] {
         let order = groups.first { $0.id == groupID }?.appPaths.map(normalizePath) ?? []

@@ -132,6 +132,16 @@ final class QuickToolStore: ObservableObject {
         persistEnabled()
     }
 
+    /// Drag-out removal: built-ins are hidden, user-added tools are deleted.
+    func remove(_ id: String) {
+        if id.hasPrefix("custom."),
+           let uuid = UUID(uuidString: String(id.dropFirst("custom.".count))) {
+            removeCustom(id: uuid)
+        } else {
+            setEnabled(id, isEnabled: false)
+        }
+    }
+
     func removeCustom(id: UUID) {
         customTools.removeAll { $0.id == id }
         persistCustom()
