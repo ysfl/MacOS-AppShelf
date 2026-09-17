@@ -544,14 +544,9 @@ struct ContentView: View {
                 }
             }
 
-        }
-        .padding(10)
-        // Only this small view watches the drag state, so highlighting a
-        // section never rebuilds the cards inside it.
-        .background { SectionDropHighlight(groupID: section.groupID) }
-        // Floats over the bottom of the block rather than pushing the grid around,
-        // so appearing and disappearing never triggers a relayout mid-drag.
-        .overlay(alignment: .bottom) {
+            // Sits below the cards (outside the grid) and stays in the layout so it
+            // never overlaps a tile. Its frame is reserved whether or not a drag is
+            // active, so it does not push the section around when it appears mid-drag.
             if let groupID = section.groupID {
                 RemoveFromGroupStrip(
                     groupID: groupID,
@@ -567,9 +562,13 @@ struct ContentView: View {
                         store.moveGroup(dragged, before: groupID)
                     }
                 )
-                .padding(10)
             }
+
         }
+        .padding(10)
+        // Only this small view watches the drag state, so highlighting a
+        // section never rebuilds the cards inside it.
+        .background { SectionDropHighlight(groupID: section.groupID) }
         // The whole block accepts drops: group reordering and filing an app into
         // this group both work anywhere inside it, not only on the heading.
         .dropDestination(for: ShelfDragItem.self) { items, _ in
@@ -1415,51 +1414,72 @@ private struct RemoveFromGroupStrip: View {
 
     @State private var isTargeted = false
     private let debounceDelay = 0.22
+    /// Reserved at all times so the strip never overlaps a card or shifts the grid
+    /// when it appears. Tall enough to drop into casually.
+    private let stripHeight: CGFloat = 56
 
     var body: some View {
-        // Visible for the whole drag; only the fill follows the cursor.
+        // Visible for the whole drag; only the fill follows the cursor. The frame is
+        // always reserved (faint hint when idle) so there is no relayout mid-drag.
         let isVisible = highlight.isDragging || isTargeted
 
-        ZStack {
+        VStack(spacing: 0) {
             if isVisible {
-                HStack(spacing: 7) {
+                HStack(spacing: 8) {
                     Image(systemName: "trash")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                     Text("拖到这里，从该分组移除")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 12.5, weight: .semibold))
                 }
                 .foregroundStyle(isTargeted ? Color.white : Color.red)
                 .frame(maxWidth: .infinity)
-                .frame(height: 38)
+                .frame(height: stripHeight)
                 .background(
-                    isTargeted ? Color.red.opacity(0.9) : Color.red.opacity(0.08),
-                    in: RoundedRectangle(cornerRadius: 9)
+                    isTargeted ? Color.red.opacity(0.9) : Color.red.opacity(0.1),
+                    in: RoundedRectangle(cornerRadius: 11)
                 )
                 .overlay {
-                    RoundedRectangle(cornerRadius: 9)
+                    RoundedRectangle(cornerRadius: 11)
                         .strokeBorder(
-                            Color.red.opacity(isTargeted ? 1 : 0.45),
+                            Color.red.opacity(isTargeted ? 1 : 0.5),
                             style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
                         )
                 }
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                .dropDestination(for: ShelfDragItem.self) { items, _ in
-                    if let dragged = items.first(where: { $0.kind == .group })?.groupID {
-                        onMoveGroup(dragged)
-                        return true
-                    }
-
-                    let paths = items.filter(\.isAppPath).map(\.value)
-                    guard !paths.isEmpty else { return false }
-                    onRemove(paths)
-                    return true
-                } isTargeted: { isTargeted in
-                    setTargeted(isTargeted)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("拖到这里移出本组")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(Color.secondary)
+                .opacity(0.32)
+                .frame(maxWidth: .infinity)
+                .frame(height: stripHeight)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 11)
+                        .strokeBorder(
+                            Color.secondary.opacity(0.3),
+                            style: StrokeStyle(lineWidth: 1.2, dash: [5, 4])
+                        )
                 }
             }
         }
         .animation(.easeOut(duration: 0.12), value: isVisible)
         .allowsHitTesting(isVisible)
+        .dropDestination(for: ShelfDragItem.self) { items, _ in
+            if let dragged = items.first(where: { $0.kind == .group })?.groupID {
+                onMoveGroup(dragged)
+                return true
+            }
+
+            let paths = items.filter(\.isAppPath).map(\.value)
+            guard !paths.isEmpty else { return false }
+            onRemove(paths)
+            return true
+        } isTargeted: { isTargeted in
+            setTargeted(isTargeted)
+        }
     }
 
     /// Debounced so a cursor sitting on the edge cannot flip the strip on and off.
