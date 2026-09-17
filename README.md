@@ -30,12 +30,16 @@ If you switch between Finder, Launchpad, and Spotlight to find apps, AppShelf gi
 - Search understands Chinese pinyin initials, full pinyin, and English acronyms, ranked by relevance. Typing "wx" finds 微信 and "vsc" finds Visual Studio Code.
 - 卡片显示磁盘占用（如 `1.2 GB`、`256 MB`）；运行中的应用在图标上加运行标记，并显示实时内存占用（如 `512 M`）。过长的名称自动换行而不是截断。
 - Each card shows its disk usage (e.g. `1.2 GB`, `256 MB`); running apps get a badge on the icon plus live memory usage (e.g. `512 M`). Long names wrap instead of being truncated.
-- “全部应用”按分区展示每个分组，卡片可以直接拖动调整组内顺序。
-- The All Apps view lists one section per group, and cards can be dragged to change their position inside a group.
+- 卡片采用启动台式的排版：大图标、居中名称，占用信息压缩成一行小字。
+- Tiles are laid out like Launchpad: a large icon, a centred name, and one quiet line of usage details.
+- “全部应用”按分区展示每个分组，卡片可以拖动调整组内顺序，分区标题和侧边栏分组行都可以拖动调整分组顺序。
+- The All Apps view lists one section per group. Cards can be dragged to change their position inside a group, and both the section headings and the sidebar rows can be dragged to reorder the groups themselves.
 - 右键菜单可以退出应用，或直接强制结束进程。
 - The context menu can quit an app or force-kill its process.
-- 快捷工具可自定义：显示、隐藏、调整顺序，也能把任意应用加为快捷工具。
-- Quick tools are customizable: show, hide, reorder, and pin any app as a quick tool.
+- 快捷工具可自定义：显示、隐藏、调整顺序，也可以在“全部应用”里把应用直接拖进快捷工具区域添加、拖出到内容区移除。
+- Quick tools are customizable: show, hide, and reorder them in Settings, or drag an app into the quick tool area to pin it and drag a tile out onto the content area to remove it.
+- 搜索栏位于标题下方独立一行，进入页面或切换分组后会自动获得键盘焦点。
+- The search field sits on its own row under the title and takes keyboard focus whenever a page is shown.
 - 在 Dock 图标上右键，可以直接打开聚焦搜索、应用架窗口、任意分组或设置。
 - Right-clicking the Dock icon opens focus search, the app window, any group, or the settings panel.
 - 支持类似 macOS 聚焦的独立搜索浮层：用快捷键唤出，输入后回车直接打开应用，不显示完整主界面。
@@ -135,9 +139,13 @@ hdiutil verify release/AppShelf-1.0.0.dmg
 
 The app list comes from the local file system and `NSWorkspace`. Groups are stored in the current user's `UserDefaults`. AppShelf does not upload the app list and does not move, modify, or uninstall discovered apps. The file picker accepts `.app` bundles when you choose “Add app”.
 
-磁盘占用只在沙箱范围之外读取 bundle 内文件大小，结果缓存在本机 `UserDefaults`；内存占用通过系统进程接口读取常驻内存。全局快捷键由 Carbon 注册，需要应用处于运行状态。
+磁盘占用 = 应用本体（`.app` 内文件大小）+ 该应用在本用户 `Library` 中的数据（`Application Support`、`Containers`、`Group Containers`、缓存、保存状态）。结果缓存在本机 `UserDefaults`，bundle 发生修改时会重新测量。
 
-Disk usage is computed by reading file sizes inside each bundle and is cached locally in `UserDefaults`; memory usage is read from the system process interface as resident memory. The global shortcut is registered through Carbon and requires the app to be running.
+Disk usage covers the `.app` bundle plus the app's data under the user's `Library` (application support, sandbox and group containers, caches, saved state). Results are cached locally in `UserDefaults` and re-measured whenever the bundle changes.
+
+内存占用通过系统进程接口读取常驻内存，并把 bundle 内的 helper 与 XPC 进程一并计入，每 3 秒刷新一次。全局快捷键由 Carbon 注册，需要应用处于运行状态。
+
+Memory usage is read from the system process interface as resident memory, summed over every process inside the bundle, and refreshed every three seconds. The global shortcut is registered through Carbon and requires the app to be running.
 
 ## 贡献 / Contributing
 

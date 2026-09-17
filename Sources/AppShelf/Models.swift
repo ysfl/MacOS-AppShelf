@@ -359,6 +359,8 @@ final class LauncherStore: ObservableObject {
 
     /// The sidebar group that a drag is currently hovering over, used for highlight feedback.
     @Published var highlightedGroupID: UUID?
+    /// Set only while a group itself is being dragged, so other rows can show reorder hints.
+    @Published var groupReorderTargetID: UUID?
 
     private let stateKey = "AppShelf.state.v2"
     private var statusClearTask: Task<Void, Never>?
@@ -500,8 +502,8 @@ final class LauncherStore: ObservableObject {
         isLoading = false
 
         // Usage data is read in the background so the grid stays responsive.
-        metrics.measure(paths: discovered.map(\.path))
-        metrics.updateMemory(running.processes.filter { running.paths.contains($0.path) })
+        metrics.measure(discovered)
+        metrics.updateMemory(forAppPaths: Array(running.paths))
     }
 
     /// Refresh only process state so a five-second timer does not repeatedly walk the file system.
@@ -514,7 +516,7 @@ final class LauncherStore: ObservableObject {
         }
         lastUpdated = Date()
 
-        metrics.updateMemory(running.processes.filter { running.paths.contains($0.path) })
+        metrics.updateMemory(forAppPaths: Array(running.paths))
     }
 
     /// Ask Launch Services to open a discovered bundle.
@@ -678,7 +680,7 @@ final class LauncherStore: ObservableObject {
         guard addedCount > 0 else { return }
 
         apps.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        metrics.measure(paths: apps.map(\.path))
+        metrics.measure(apps)
         persistState()
         note("已把 \(addedCount) 个应用加入“\(groups[groupIndex].name)”")
     }

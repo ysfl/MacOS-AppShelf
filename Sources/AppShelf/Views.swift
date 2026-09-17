@@ -45,6 +45,50 @@ private enum ShelfDragPayload {
     }
 }
 
+/// A dragged group travels with the cursor as a small card: its heading plus a few
+/// of its icons, so the gesture looks like the whole group is being moved.
+private struct GroupDragPreview: View {
+    let title: String
+    let symbol: String
+    let tint: Color
+    let apps: [AppItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text(title)
+                    .font(.system(size: 12.5, weight: .semibold))
+                Text("\(apps.count)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            if !apps.isEmpty {
+                HStack(spacing: 5) {
+                    ForEach(apps.prefix(6)) { app in
+                        AppIconView(path: app.path)
+                            .frame(width: 30, height: 30)
+                    }
+                    if apps.count > 6 {
+                        Text("+\(apps.count - 6)")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.96), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(tint.opacity(0.65), lineWidth: 1.5)
+        }
+    }
+}
+
 /// One block of cards shown under a group heading in the All Apps view.
 private struct AppSection: Identifiable {
     let id: String
@@ -70,8 +114,9 @@ struct ContentView: View {
     @State private var isShowingAddSheet = false
     @State private var appToMove: AppItem?
 
-    // Running state is cheap to refresh and should reflect apps launched outside AppShelf.
-    private let refreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    // Running state and memory are cheap to refresh, and a short interval keeps the
+    // memory readouts on the cards close to live.
+    private let refreshTimer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -307,8 +352,10 @@ struct ContentView: View {
     }
 
     /// All Apps is laid out as one block per group, in the order the user arranged them.
+    /// While a group is being dragged every block is outlined, and the one under the
+    /// cursor is filled, so the drop target is obvious without reading any hint text.
     private var sectionedApps: some View {
-        VStack(alignment: .leading, spacing: 26) {
+        VStack(alignment: .leading, spacing: 18) {
             ForEach(appSections) { section in
                 VStack(alignment: .leading, spacing: 10) {
                     sectionHeader(section)
@@ -319,9 +366,39 @@ struct ContentView: View {
                         }
                     }
                 }
+                .padding(10)
+                .background {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(sectionFill(for: section))
+                        .strokeBorder(
+                            sectionStroke(for: section),
+                            style: isTargeted(section) ? StrokeStyle(lineWidth: 2) : StrokeStyle(lineWidth: 1, dash: [5, 4])
+                        )
+                }
+                .animation(.easeOut(duration: 0.12), value: isSectionDropTarget)
             }
         }
     }
+
+    private func isTargeted(_ section: AppSection) -> Bool {
+        section.groupID == isSectionDropTarget
+    }
+
+    private func sectionFill(for section: AppSection) -> Color {
+        if isTargeted(section) { return AppShelfPalette.accent.opacity(0.13) }
+        return isGroupReordering ? Color.primary.opacity(0.05) : Color.clear
+    }
+
+    private func sectionStroke(for section: AppSection) -> Color {
+        if isTargeted(section) { return AppShelfPalette.accent }
+        return isGroupReordering ? AppShelfPalette.accent.opacity(0.35) : Color.clear
+    }
+
+    /// True while any group row or section heading is hovering over a drop target.
+    private var isGroupReordering: Bool {
+        isSectionDropTarget != nil || store.groupReorderTargetID != nil
+    }
+
 
     /// Section headings are themselves draggable, so groups can be reordered here too.
     @ViewBuilder
@@ -354,10 +431,12 @@ struct ContentView: View {
         if let groupID = section.groupID {
             header
                 .draggable(GroupDragPayload(id: groupID)) {
-                    Text(section.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
+                    GroupDragPreview(
+                        title: section.title,
+                        symbol: section.symbol,
+                        tint: section.tint,
+                        apps: section.apps
+                    )
                 }
                 .dropDestination(for: GroupDragPayload.self) { items, _ in
                     guard let dragged = items.first?.id else { return false }
@@ -645,11 +724,14 @@ struct SidebarView: View {
                             }
                             // The row accepts two kinds of drop: an app card (files it here)
                             // or another group row (reorders the sidebar).
-                            .draggable(GroupDragPayload(id: group.id)) {
-                                Label(group.name, systemImage: group.symbol)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
+                            .draggable(GroupDragPayload(id: group.id)) { [store] in
+                                // The whole group travels with the cursor, cards included.
+                                GroupDragPreview(
+                                    title: group.name,
+                                    symbol: group.symbol,
+                                    tint: group.color,
+                                    apps: Array(store.orderedApps(in: group.id).prefix(6))
+                                )
                             }
                             // Two drop targets on one row: an app card files the app here,
                             // another group row reorders the sidebar.
@@ -658,7 +740,10 @@ struct SidebarView: View {
                                 store.moveGroup(dragged, before: group.id)
                                 return true
                             } isTargeted: { isTargeted in
-                                store.highlightedGroupID = isTargeted ? group.id : nil
+                                store.groupReorderTargetID = isTargeted ? group.id : nil
+                                if !isTargeted && store.highlightedGroupID == group.id {
+                                    store.highlightedGroupID = nil
+                                }
                             }
                             .dropDestination(for: String.self) { items, _ in
                                 let paths = items.filter(ShelfDragPayload.isAppPath)
@@ -862,7 +947,7 @@ private struct ToolRow: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
         } else if let path = tool.path {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+            Image(nsImage: IconCache.shared.image(for: path))
                 .resizable()
                 .interpolation(.high)
         }
@@ -948,9 +1033,9 @@ private struct AppCard: View {
         .frame(maxWidth: .infinity, minHeight: 158, alignment: .top)
         .background(hoverBackground)
         .contentShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(isHovering ? 0.10 : 0), radius: 10, y: 4)
-        .scaleEffect(isHovering ? 1.02 : 1)
-        .animation(.easeOut(duration: 0.12), value: isHovering)
+        // No animated shadow or scale: animating those on two hundred tiles at once is
+        // what made hovering and dragging feel heavy.
+        .scaleEffect(isHovering ? 1.015 : 1)
     }
 
     /// Category, disk usage, and memory share one small line. The category is only
@@ -976,6 +1061,7 @@ private struct AppCard: View {
         }
         .font(.system(size: 10.5, weight: .medium, design: .rounded))
         .lineLimit(1)
+        .help("磁盘占用 = 应用本体 + 该应用在 Library 中的数据；内存为运行中全部进程之和")
     }
 
     /// No permanent outline: the tile only gains a soft rounded surface while hovered,
@@ -986,16 +1072,35 @@ private struct AppCard: View {
     }
 }
 
+/// Caches app icons. `NSWorkspace.icon(forFile:)` goes through Launch Services, and
+/// calling it for every card on every redraw is what made dragging feel sluggish.
+private final class IconCache {
+    static let shared = IconCache()
+
+    private let cache = NSCache<NSString, NSImage>()
+
+    private init() {
+        cache.countLimit = 500
+    }
+
+    func image(for path: String) -> NSImage {
+        let key = path as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        let image = NSWorkspace.shared.icon(forFile: path)
+        cache.setObject(image, forKey: key)
+        return image
+    }
+}
+
 /// Resolve the icon from the bundle path so third-party apps use their own artwork.
 private struct AppIconView: View {
     let path: String
 
     var body: some View {
-        Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+        Image(nsImage: IconCache.shared.image(for: path))
             .resizable()
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
-            .shadow(color: .black.opacity(0.12), radius: 3, y: 2)
     }
 }
 
@@ -1052,7 +1157,7 @@ private struct QuickToolTile: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(AppShelfPalette.accent)
         } else if let path = tool.path {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+            Image(nsImage: IconCache.shared.image(for: path))
                 .resizable()
                 .interpolation(.high)
         }
