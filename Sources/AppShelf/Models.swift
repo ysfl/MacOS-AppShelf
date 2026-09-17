@@ -357,8 +357,6 @@ final class LauncherStore: ObservableObject {
     /// Disk and memory usage for the cards.
     let metrics = AppMetrics.shared
 
-    /// The sidebar group a drag is hovering over, used for highlight feedback.
-    @Published var highlightedGroupID: UUID?
 
     private let stateKey = "AppShelf.state.v2"
     private var statusClearTask: Task<Void, Never>?
@@ -507,13 +505,20 @@ final class LauncherStore: ObservableObject {
     /// Refresh only process state so a five-second timer does not repeatedly walk the file system.
     func refreshRunningState() {
         let running = runningProcesses()
-        apps = apps.map { app in
-            var updated = app
-            updated.isRunning = running.paths.contains(app.path)
-            return updated
+        let updated = apps.map { app -> AppItem in
+            var item = app
+            item.isRunning = running.paths.contains(app.path)
+            return item
         }
-        lastUpdated = Date()
 
+        // Publishing a new array every tick would rebuild every card three times a
+        // second, so the grid is only invalidated when something actually changed.
+        let didChange = zip(apps, updated).contains { $0.isRunning != $1.isRunning }
+        if didChange {
+            apps = updated
+        }
+
+        lastUpdated = Date()
         metrics.updateMemory(forAppPaths: Array(running.paths))
     }
 

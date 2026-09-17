@@ -20,6 +20,29 @@ extension UTType {
     static let appShelfDragItem = UTType(exportedAs: "local.dan.AppShelf.drag")
 }
 
+/// Where a drag is currently hovering.
+///
+/// This lives in its own object instead of the content view on purpose: only the small
+/// highlight views observe it, so moving the cursor during a drag repaints a few
+/// outlines rather than rebuilding every card in the window.
+final class DragHighlight: ObservableObject {
+    static let shared = DragHighlight()
+
+    @Published var sectionTargetID: UUID?
+    @Published var sidebarGroupID: UUID?
+    @Published var quickToolTarget = false
+
+    var isReordering: Bool {
+        sectionTargetID != nil || sidebarGroupID != nil
+    }
+
+    func clear() {
+        sectionTargetID = nil
+        sidebarGroupID = nil
+        quickToolTarget = false
+    }
+}
+
 /// What is being dragged: an app card, a group, or a quick tool tile.
 private struct ShelfDragItem: Codable, Transferable {
     enum Kind: String, Codable {
@@ -117,8 +140,8 @@ struct ContentView: View {
     @ObservedObject private var quickTools = QuickToolStore.shared
 
     @FocusState private var isSearchFocused: Bool
-    @State private var isSectionDropTarget: UUID?
-    @State private var isQuickToolDropTarget = false
+    // Highlight state is kept outside the view so drag hovers do not rebuild the grid.
+    private let highlight = DragHighlight.shared
     @State private var isShowingNewGroup = false
     @State private var groupBeingEdited: AppGroup?
     @State private var groupPendingDeletion: AppGroup?
@@ -380,14 +403,9 @@ struct ContentView: View {
                     }
                 }
                 .padding(10)
-                .background {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(sectionFill(for: section))
-                        .strokeBorder(
-                            sectionStroke(for: section),
-                            style: isTargeted(section) ? StrokeStyle(lineWidth: 2) : StrokeStyle(lineWidth: 1, dash: [5, 4])
-                        )
-                }
+                // Only this small view watches the drag state, so highlighting a
+                // section never rebuilds the cards inside it.
+                .background { SectionDropHighlight(groupID: section.groupID) }
                 // The whole block accepts drops: group reordering and filing an app into
                 // this group both work anywhere inside it, not only on the heading.
                 .dropDestination(for: ShelfDragItem.self) { items, _ in
@@ -403,32 +421,61 @@ struct ContentView: View {
                     store.addApps(paths, to: groupID)
                     return true
                 } isTargeted: { isTargeted in
-                    isSectionDropTarget = isTargeted ? section.groupID : nil
+                    highlight.sectionTargetID = isTargeted ? section.groupID : nil
                 }
-                .animation(.easeOut(duration: 0.12), value: isSectionDropTarget)
             }
         }
     }
 
-    private func isTargeted(_ section: AppSection) -> Bool {
-        section.groupID == isSectionDropTarget
+    /// The short hint next to a section heading, kept separate for the same reason.
+    private struct SectionDropHint: View {
+        @ObservedObject private var highlight = DragHighlight.shared
+        let groupID: UUID?
+
+        var body: some View {
+            Text(highlight.sectionTargetID == groupID ? "放到这里" : "拖动标题或卡片可调整顺序")
+                .font(.system(size: 10))
+                .foregroundStyle(
+                    highlight.sectionTargetID == groupID
+                        ? AppShelfPalette.accent
+                        : Color.secondary.opacity(0.7)
+                )
+        }
     }
 
-    private func sectionFill(for section: AppSection) -> Color {
-        if isTargeted(section) { return AppShelfPalette.accent.opacity(0.13) }
-        return isGroupReordering ? Color.primary.opacity(0.05) : Color.clear
+    /// The dashed outline every block shows while a drag is in flight, and the filled
+    /// outline of the block under the cursor.
+    private struct SectionDropHighlight: View {
+        @ObservedObject private var highlight = DragHighlight.shared
+        let groupID: UUID?
+
+        var body: some View {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(fill)
+                .strokeBorder(
+                    stroke,
+                    style: isTarget
+                        ? StrokeStyle(lineWidth: 2)
+                        : StrokeStyle(lineWidth: 1, dash: [5, 4])
+                )
+        }
+
+        private var isTarget: Bool {
+            groupID != nil && highlight.sectionTargetID == groupID
+        }
+
+        private var fill: Color {
+            if isTarget { return AppShelfPalette.accent.opacity(0.13) }
+            return highlight.isReordering ? Color.primary.opacity(0.05) : Color.clear
+        }
+
+        private var stroke: Color {
+            if isTarget { return AppShelfPalette.accent }
+            return highlight.isReordering ? AppShelfPalette.accent.opacity(0.35) : Color.clear
+        }
     }
 
-    private func sectionStroke(for section: AppSection) -> Color {
-        if isTargeted(section) { return AppShelfPalette.accent }
-        return isGroupReordering ? AppShelfPalette.accent.opacity(0.35) : Color.clear
-    }
 
-    /// True while a drag is hovering over a group row or a section, so every block can
-    /// show that it is a possible destination.
-    private var isGroupReordering: Bool {
-        isSectionDropTarget != nil || store.highlightedGroupID != nil
-    }
 
 
     /// Section headings are themselves draggable, so groups can be reordered here too.
@@ -451,9 +498,7 @@ struct ContentView: View {
             Spacer(minLength: 0)
 
             if section.groupID != nil {
-                Text(isSectionDropTarget == section.groupID ? "放到这里" : "拖动标题或卡片可调整顺序")
-                    .font(.system(size: 10))
-                    .foregroundStyle(isSectionDropTarget == section.groupID ? AppShelfPalette.accent : Color.secondary.opacity(0.7))
+                SectionDropHint(groupID: section.groupID)
             }
         }
         .padding(.vertical, 4)
@@ -562,88 +607,57 @@ struct ContentView: View {
     }
 
     private var quickToolsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("快捷工具")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(isQuickToolDropTarget ? "松手即可添加" : "拖应用进来添加，拖出去移除")
-                    .font(.system(size: 11))
-                    .foregroundStyle(isQuickToolDropTarget ? AppShelfPalette.accent : Color.secondary.opacity(0.7))
-            }
+        QuickToolsRow { tool in
+            store.launch(tool)
+        } onAdded: { message in
+            store.note(message)
+        }
+    }
 
-            // A grid instead of a single row so any number of tools stays inside the window.
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 150, maximum: 230), spacing: 10)],
-                alignment: .leading,
-                spacing: 10
-            ) {
-                ForEach(quickTools.items) { tool in
-                    QuickToolTile(tool: tool) {
-                        store.launch(tool)
-                    }
+    /// The footer is its own view so the refresh timestamp updating every few seconds
+    /// does not invalidate the whole page.
+    private struct StatusFooter: View {
+        @ObservedObject var store: LauncherStore
+
+        var body: some View {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(store.isLoading ? Color.orange : AppShelfPalette.success)
+                    .frame(width: 7, height: 7)
+
+                Text(store.isLoading ? "正在扫描应用…" : "已扫描 \(store.apps.count) 个应用")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Text("·")
+                    .foregroundStyle(.tertiary)
+
+                Text("更新于 \(store.lastUpdated.formatted(date: .omitted, time: .shortened))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+
+                if let message = store.statusMessage {
+                    Text("·")
+                        .foregroundStyle(.tertiary)
+                    Text(message)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(AppShelfPalette.accent)
                 }
+
+                Spacer()
+
+                Text("应用架")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.tertiary)
             }
-        }
-        .padding(8)
-        .background {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(
-                    isQuickToolDropTarget ? AppShelfPalette.accent : Color.clear,
-                    style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
-                )
-        }
-        // Dropping an app card here pins it as a quick tool.
-        .dropDestination(for: ShelfDragItem.self) { items, _ in
-            let paths = items.filter(\.isAppPath).map(\.value)
-            guard !paths.isEmpty else { return false }
-            for path in paths {
-                let name = AppDiscoveryService.item(for: URL(fileURLWithPath: path))?.name
-                    ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-                quickTools.addCustom(name: name, path: path)
-            }
-            store.note("已加入快捷工具")
-            return true
-        } isTargeted: { isTargeted in
-            isQuickToolDropTarget = isTargeted
+            .padding(.horizontal, 28)
+            .padding(.vertical, 10)
+            .background(AppShelfPalette.sidebar.opacity(0.58))
         }
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(store.isLoading ? Color.orange : AppShelfPalette.success)
-                .frame(width: 7, height: 7)
-
-            Text(store.isLoading ? "正在扫描应用…" : "已扫描 \(store.apps.count) 个应用")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            Text("·")
-                .foregroundStyle(.tertiary)
-
-            Text("更新于 \(store.lastUpdated.formatted(date: .omitted, time: .shortened))")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-
-            if let message = store.statusMessage {
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                Text(message)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(AppShelfPalette.accent)
-            }
-
-            Spacer()
-
-            Text("应用架")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 10)
-        .background(AppShelfPalette.sidebar.opacity(0.58))
+        StatusFooter(store: store)
     }
 
     private var shouldShowQuickTools: Bool {
@@ -679,6 +693,77 @@ struct ContentView: View {
 
     private func openSystemSettings() {
         SettingsWindowController.shared.showWindow()
+    }
+}
+
+/// The draggable group list in the sidebar, split out so the sidebar body stays small.
+private struct SidebarGroups: View {
+    @EnvironmentObject private var store: LauncherStore
+    @ObservedObject private var highlight = DragHighlight.shared
+
+    let onNewGroup: () -> Void
+    let onEditGroup: (AppGroup) -> Void
+    let onDeleteGroup: (AppGroup) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                SidebarSectionLabel("分组")
+                Spacer()
+                Button(action: onNewGroup) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("新建分组")
+            }
+
+            ForEach(store.groups) { group in
+                SidebarRow(
+                    title: group.name,
+                    symbol: group.symbol,
+                    tint: group.color,
+                    count: store.count(for: .group(group.id)),
+                    isSelected: store.selection == .group(group.id),
+                    isDropTarget: highlight.sidebarGroupID == group.id
+                ) {
+                    store.selection = .group(group.id)
+                }
+                .contextMenu {
+                    Button("编辑分组", systemImage: "pencil") {
+                        onEditGroup(group)
+                    }
+                    Button("删除分组", systemImage: "trash", role: .destructive) {
+                        onDeleteGroup(group)
+                    }
+                }
+                // The whole group travels with the cursor, cards included.
+                .draggable(ShelfDragItem.group(group.id)) {
+                    GroupDragPreview(
+                        title: group.name,
+                        symbol: group.symbol,
+                        tint: group.color,
+                        apps: Array(store.orderedApps(in: group.id).prefix(6))
+                    )
+                }
+                // One drop target for the whole row: another group reorders,
+                // an app card is filed into this group.
+                .dropDestination(for: ShelfDragItem.self) { items, _ in
+                    if let dragged = items.first(where: { $0.kind == .group })?.groupID {
+                        store.moveGroup(dragged, before: group.id)
+                        return true
+                    }
+
+                    let paths = items.filter(\.isAppPath).map(\.value)
+                    guard !paths.isEmpty else { return false }
+                    store.addApps(paths, to: group.id)
+                    return true
+                } isTargeted: { isTargeted in
+                    highlight.sidebarGroupID = isTargeted ? group.id : nil
+                }
+            }
+        }
     }
 }
 
@@ -728,66 +813,12 @@ struct SidebarView: View {
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack {
-                            SidebarSectionLabel("分组")
-                            Spacer()
-                            Button(action: onNewGroup) {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 11, weight: .bold))
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                            .help("新建分组")
-                        }
-
-                        ForEach(store.groups) { group in
-                            SidebarRow(
-                                title: group.name,
-                                symbol: group.symbol,
-                                tint: group.color,
-                                count: store.count(for: .group(group.id)),
-                                isSelected: store.selection == .group(group.id),
-                                isDropTarget: store.highlightedGroupID == group.id
-                            ) {
-                                store.selection = .group(group.id)
-                            }
-                            .contextMenu {
-                                Button("编辑分组", systemImage: "pencil") {
-                                    onEditGroup(group)
-                                }
-                                Button("删除分组", systemImage: "trash", role: .destructive) {
-                                    onDeleteGroup(group)
-                                }
-                            }
-                            // The row accepts two kinds of drop: an app card (files it here)
-                            // or another group row (reorders the sidebar).
-                            .draggable(ShelfDragItem.group(group.id)) { [store] in
-                                // The whole group travels with the cursor, cards included.
-                                GroupDragPreview(
-                                    title: group.name,
-                                    symbol: group.symbol,
-                                    tint: group.color,
-                                    apps: Array(store.orderedApps(in: group.id).prefix(6))
-                                )
-                            }
-                            // One drop target for the whole row: another group reorders,
-                            // an app card is filed into this group.
-                            .dropDestination(for: ShelfDragItem.self) { items, _ in
-                                if let dragged = items.first(where: { $0.kind == .group })?.groupID {
-                                    store.moveGroup(dragged, before: group.id)
-                                                                        return true
-                                }
-
-                                let paths = items.filter(\.isAppPath).map(\.value)
-                                guard !paths.isEmpty else { return false }
-                                store.addApps(paths, to: group.id)
-                                return true
-                            } isTargeted: { isTargeted in
-                                store.highlightedGroupID = isTargeted ? group.id : nil
-                            }
-                        }
-                    }
+                    SidebarGroups(
+                        onNewGroup: onNewGroup,
+                        onEditGroup: onEditGroup,
+                        onDeleteGroup: onDeleteGroup
+                    )
+                    .environmentObject(store)
 
                     VStack(alignment: .leading, spacing: 5) {
                         SidebarSectionLabel("快捷工具")
@@ -1000,7 +1031,6 @@ private struct AppCard: View {
     let onQuit: (() -> Void)?
     let onForceQuit: (() -> Void)?
 
-    @ObservedObject private var metrics = AppMetrics.shared
     @State private var isHovering = false
 
     var body: some View {
@@ -1029,8 +1059,6 @@ private struct AppCard: View {
         .help("打开\(app.name)")
     }
 
-    /// Icon on the left, name and usage stacked beside it, so a card reads as one row
-    /// instead of an icon floating over empty space.
     /// Launchpad-style tile: a large icon, a centred name, and one quiet info line.
     private var cardContent: some View {
         VStack(spacing: 9) {
@@ -1059,7 +1087,9 @@ private struct AppCard: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
 
-            infoLine
+            // Only this line watches usage data, so a memory refresh does not redraw
+            // the icon or the rest of the tile.
+            AppUsageLine(app: app, showsCategory: showsCategory)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 14)
@@ -1073,28 +1103,34 @@ private struct AppCard: View {
 
     /// Category, disk usage, and memory share one small line. The category is only
     /// repeated when the tile is not already sitting inside that group's section.
-    private var infoLine: some View {
-        HStack(spacing: 4) {
-            if showsCategory {
-                Text(app.category)
+    private struct AppUsageLine: View {
+        @ObservedObject private var metrics = AppMetrics.shared
+        let app: AppItem
+        let showsCategory: Bool
+
+        var body: some View {
+            HStack(spacing: 4) {
+                if showsCategory {
+                    Text(app.category)
+                        .foregroundStyle(.secondary)
+                    Text("·")
+                        .foregroundStyle(.tertiary)
+                }
+
+                Text(metrics.sizeText(for: app.path))
                     .foregroundStyle(.secondary)
-                Text("·")
-                    .foregroundStyle(.tertiary)
-            }
 
-            Text(metrics.sizeText(for: app.path))
-                .foregroundStyle(.secondary)
-
-            if app.isRunning {
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                Text(metrics.memoryText(for: app.path))
-                    .foregroundStyle(AppShelfPalette.success)
+                if app.isRunning {
+                    Text("·")
+                        .foregroundStyle(.tertiary)
+                    Text(metrics.memoryText(for: app.path))
+                        .foregroundStyle(AppShelfPalette.success)
+                }
             }
+            .font(.system(size: 10.5, weight: .medium, design: .rounded))
+            .lineLimit(1)
+            .help("磁盘占用 = 应用本体 + 该应用在 Library 中的数据；内存为运行中全部进程之和")
         }
-        .font(.system(size: 10.5, weight: .medium, design: .rounded))
-        .lineLimit(1)
-        .help("磁盘占用 = 应用本体 + 该应用在 Library 中的数据；内存为运行中全部进程之和")
     }
 
     /// No permanent outline: the tile only gains a soft rounded surface while hovered,
@@ -1107,7 +1143,7 @@ private struct AppCard: View {
 
 /// Caches app icons. `NSWorkspace.icon(forFile:)` goes through Launch Services, and
 /// calling it for every card on every redraw is what made dragging feel sluggish.
-private final class IconCache {
+final class IconCache {
     static let shared = IconCache()
 
     private let cache = NSCache<NSString, NSImage>()
@@ -1134,6 +1170,65 @@ private struct AppIconView: View {
             .resizable()
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
+    }
+}
+
+/// The quick tool row at the top of All Apps.
+/// Its own view so the drop highlight does not invalidate the whole page.
+private struct QuickToolsRow: View {
+    @ObservedObject private var quickTools = QuickToolStore.shared
+    @State private var isTargeted = false
+
+    let onLaunch: (QuickToolItem) -> Void
+    let onAdded: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("快捷工具")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(isTargeted ? "松手即可添加" : "拖应用进来添加，拖出去移除")
+                    .font(.system(size: 11))
+                    .foregroundStyle(isTargeted ? AppShelfPalette.accent : Color.secondary.opacity(0.7))
+            }
+
+            // A grid instead of a single row so any number of tools stays inside the window.
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 150, maximum: 230), spacing: 10)],
+                alignment: .leading,
+                spacing: 10
+            ) {
+                ForEach(quickTools.items) { tool in
+                    QuickToolTile(tool: tool) {
+                        onLaunch(tool)
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .background {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(
+                    isTargeted ? AppShelfPalette.accent : Color.clear,
+                    style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
+                )
+        }
+        // Dropping an app card here pins it as a quick tool.
+        .dropDestination(for: ShelfDragItem.self) { items, _ in
+            let paths = items.filter(\.isAppPath).map(\.value)
+            guard !paths.isEmpty else { return false }
+            for path in paths {
+                let name = AppDiscoveryService.item(for: URL(fileURLWithPath: path))?.name
+                    ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+                quickTools.addCustom(name: name, path: path)
+            }
+            onAdded("已加入快捷工具")
+            return true
+        } isTargeted: { isTargeted in
+            self.isTargeted = isTargeted
+        }
     }
 }
 

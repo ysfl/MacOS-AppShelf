@@ -154,6 +154,8 @@ final class AppMetrics: ObservableObject {
             if total > 0 { totals[path] = total }
         }
 
+        // Only publish when a number moved, so the cards are not redrawn on every tick.
+        guard totals != memory else { return }
         memory = totals
     }
 

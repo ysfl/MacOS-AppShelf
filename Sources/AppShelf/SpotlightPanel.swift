@@ -399,7 +399,7 @@ private struct SpotlightRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 11) {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: app.path))
+                Image(nsImage: IconCache.shared.image(for: app.path))
                     .resizable()
                     .interpolation(.high)
                     .frame(width: 34, height: 34)
