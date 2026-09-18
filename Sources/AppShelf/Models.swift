@@ -512,8 +512,10 @@ final class LauncherStore: ObservableObject {
         lastUpdated = Date()
         isLoading = false
 
-        // Usage data is read in the background so the grid stays responsive.
-        metrics.measure(discovered)
+        // Usage data is read in the background so the grid stays responsive. Disk
+        // size is requested per tile as it appears; memory here is already on the
+        // utility queue, so neither blocks this pile-up of redraws.
+        metrics.register(discovered)
         metrics.updateMemory(forAppPaths: Array(running.paths))
     }
 
@@ -717,7 +719,7 @@ final class LauncherStore: ObservableObject {
         guard addedCount > 0 else { return }
 
         apps.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        metrics.measure(apps)
+        metrics.register(apps)
         persistState()
         note(L10n.shared.t("added_to_group", args: ["count": "\(addedCount)", "name": groups[groupIndex].name]))
     }
@@ -750,7 +752,9 @@ final class LauncherStore: ObservableObject {
 
     /// Drops dragged cards ahead of `target` inside one group, which both reorders
     /// existing members and files new ones at that position.
-    func moveApps(_ draggedPaths: [String], before target: AppItem, in groupID: UUID) {
+    /// `persist: false` is used by the live drag reflow, which can reorder many times
+    /// per gesture; the caller writes once when the drop lands.
+    func moveApps(_ draggedPaths: [String], before target: AppItem, in groupID: UUID, persist: Bool = true) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
         var list = groups[index].appPaths.map(normalizePath)
         var didChange = false
@@ -768,6 +772,12 @@ final class LauncherStore: ObservableObject {
 
         guard didChange else { return }
         groups[index].appPaths = list
+        if persist { persistState() }
+    }
+
+    /// Writes group state immediately. Drag reflows reorder without saving, so the
+    /// drop handler calls this once the arrangement is final.
+    func persistGroups() {
         persistState()
     }
 

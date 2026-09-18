@@ -66,6 +66,26 @@ enum ProcessMemory {
     }
 }
 
+/// Usage numbers for exactly one app.
+///
+/// Each tile watches only its own instance, so a measurement landing for one app
+/// repaints that tile's footer instead of every visible footer in the grid. Values
+/// are pre-formatted so no formatting work happens inside `View.body`.
+final class AppStat: ObservableObject {
+    let path: String
+    @Published private(set) var sizeText: String = "—"
+    @Published private(set) var memoryText: String = "—"
+
+    init(path: String) { self.path = path }
+
+    func apply(size: Int64?, memory: Int64?) {
+        let newSize = ByteFormatter.disk(size ?? 0)
+        if newSize != sizeText { sizeText = newSize }
+        let newMemory = ByteFormatter.memory(memory ?? 0)
+        if newMemory != memoryText { memoryText = newMemory }
+    }
+}
+
 /// Owns disk and memory usage for the app grid.
 ///
 /// Disk usage covers the bundle plus the app's own Library data, because an app such
@@ -91,6 +111,10 @@ final class AppMetrics: ObservableObject {
     private var trackedApps: [AppItem] = []
     private var inFlight: Set<String> = []
     private var saveWork: DispatchWorkItem?
+    /// One observable per app path, reused across scrolls so the tile footprint stays stable.
+    private var stats: [String: AppStat] = [:]
+    /// Guards the periodic process scan so ticks cannot pile up.
+    private var memoryScanScheduled = false
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -108,6 +132,15 @@ final class AppMetrics: ObservableObject {
         defaults.removeObject(forKey: "AppShelf.sizeCache.v1")
     }
 
+    /// The observable a single tile should watch. Only changed values are published.
+    func stat(for path: String) -> AppStat {
+        if let existing = stats[path] { return existing }
+        let created = AppStat(path: path)
+        created.apply(size: sizes[path], memory: memory[path])
+        stats[path] = created
+        return created
+    }
+
     func sizeText(for path: String) -> String {
         ByteFormatter.disk(sizes[path] ?? 0)
     }
@@ -116,47 +149,84 @@ final class AppMetrics: ObservableObject {
         ByteFormatter.memory(memory[path] ?? 0)
     }
 
-    /// Schedules a measurement for every app that is missing, or whose bundle has
-    /// been modified since the last measurement.
-    func measure(_ apps: [AppItem]) {
+    /// Remembers the known apps but measures nothing yet.
+    ///
+    /// Disk usage is requested per tile as it scrolls into view, so opening the app
+    /// no longer queues hundreds of directory walks or touches the file system on
+    /// the main thread while the grid is still settling.
+    func register(_ apps: [AppItem]) {
         trackedApps = apps
+    }
 
-        for app in apps {
-            let modified = Self.bundleModificationDate(at: app.path)
-            if let record = records[app.path], record.bundleModifiedAt == modified { continue }
-            guard !inFlight.contains(app.path) else { continue }
+    /// Called when a tile appears. Cached apps cost nothing; everything else is
+    /// measured off the main thread.
+    func requestSizeIfNeeded(for app: AppItem) {
+        guard sizes[app.path] == nil else { return }
+        guard !inFlight.contains(app.path) else { return }
+        inFlight.insert(app.path)
 
-            inFlight.insert(app.path)
-            let path = app.path
-            let identifier = app.bundleIdentifier
-            let name = app.name
-            queue.addOperation { [weak self] in
-                let bytes = AppMetrics.totalSize(bundlePath: path, bundleIdentifier: identifier, displayName: name)
-                DispatchQueue.main.async {
-                    self?.complete(path: path, bytes: bytes, bundleModifiedAt: modified)
-                }
+        let path = app.path
+        let identifier = app.bundleIdentifier
+        let name = app.name
+        // Captured on the main thread; the worker must not read `records` concurrently.
+        let cachedModifiedAt = records[path]?.bundleModifiedAt
+
+        queue.addOperation { [weak self] in
+            let modified = AppMetrics.bundleModificationDate(at: path)
+            // Still current: skip the walk entirely, this is the common case.
+            if let cachedModifiedAt, cachedModifiedAt == modified {
+                DispatchQueue.main.async { self?.inFlight.remove(path) }
+                return
+            }
+
+            let bytes = AppMetrics.totalSize(bundlePath: path, bundleIdentifier: identifier, displayName: name)
+            DispatchQueue.main.async {
+                self?.complete(path: path, bytes: bytes, bundleModifiedAt: modified)
             }
         }
     }
 
+    /// Forces a fresh measurement, ignoring anything already cached.
+    private func forceMeasure(_ app: AppItem) {
+        inFlight.remove(app.path)
+        sizes.removeValue(forKey: app.path)
+        requestSizeIfNeeded(for: app)
+    }
+
     /// Sums every process whose executable lives inside the given bundles.
+    ///
+    /// The scan walks every pid on the system, which is thousands of syscalls, so it
+    /// runs on the utility queue and only the comparison and publish happen on main.
     func updateMemory(forAppPaths paths: [String]) {
-        let samples = ProcessMemory.snapshot()
-        var totals: [String: Int64] = [:]
+        guard !memoryScanScheduled else { return }
+        memoryScanScheduled = true
+        let paths = paths
 
-        for path in paths {
-            // The trailing slash keeps "...Mail.app" from also matching "...Mail Helper.app".
-            let prefix = path + "/"
-            var total: Int64 = 0
-            for sample in samples where sample.executablePath.hasPrefix(prefix) {
-                total += sample.residentBytes
+        queue.addOperation { [weak self] in
+            let samples = ProcessMemory.snapshot()
+            var totals: [String: Int64] = [:]
+
+            for path in paths {
+                // The trailing slash keeps "...Mail.app" from also matching "...Mail Helper.app".
+                let prefix = path + "/"
+                var total: Int64 = 0
+                for sample in samples where sample.executablePath.hasPrefix(prefix) {
+                    total += sample.residentBytes
+                }
+                if total > 0 { totals[path] = total }
             }
-            if total > 0 { totals[path] = total }
-        }
 
-        // Only publish when a number moved, so the cards are not redrawn on every tick.
-        guard totals != memory else { return }
-        memory = totals
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.memoryScanScheduled = false
+                guard totals != self.memory else { return }
+                self.memory = totals
+                // Apps that stopped running must fall back to "—", so every stat is refreshed.
+                for (path, stat) in self.stats {
+                    stat.apply(size: self.sizes[path], memory: totals[path])
+                }
+            }
+        }
     }
 
     /// Drops the cached disk usage so the next pass measures everything again.
@@ -170,13 +240,14 @@ final class AppMetrics: ObservableObject {
 
     func recalculate() {
         invalidateDiskCache()
-        measure(trackedApps)
+        trackedApps.forEach(forceMeasure)
     }
 
     private func complete(path: String, bytes: Int64, bundleModifiedAt: TimeInterval) {
         inFlight.remove(path)
         records[path] = Record(bytes: bytes, bundleModifiedAt: bundleModifiedAt)
         sizes[path] = bytes
+        stats[path]?.apply(size: bytes, memory: memory[path])
         scheduleSave()
     }
 

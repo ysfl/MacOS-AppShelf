@@ -25,18 +25,66 @@ extension UTType {
 /// This lives in its own object instead of the content view on purpose: only the small
 /// highlight views observe it, so moving the cursor during a drag repaints a few
 /// outlines rather than rebuilding every card in the window.
+/// Whether a drag is in progress at all.
+///
+/// Deliberately separate from `DragHighlight`: that object publishes on every pointer
+/// move, so subscribing every tile to it would repaint the whole grid while dragging.
+/// This one only changes twice per drag, so tiles can safely watch it to draw their
+/// outline.
+final class DragActivity: ObservableObject {
+    static let shared = DragActivity()
+
+    @Published private(set) var isActive = false
+
+    private var endWork: DispatchWorkItem?
+
+    func begin() {
+        endWork?.cancel()
+        endWork = nil
+        if !isActive { isActive = true }
+    }
+
+    /// Called as soon as a drop has been handled.
+    func end() {
+        endWork?.cancel()
+        endWork = nil
+        isActive = false
+    }
+
+    /// Leaving one target often just means entering another, so the flag only clears
+    /// after a pause with nothing hovered.
+    func scheduleEnd() {
+        endWork?.cancel()
+        let work = DispatchWorkItem { self.isActive = false }
+        endWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: work)
+    }
+}
+
 final class DragHighlight: ObservableObject {
     static let shared = DragHighlight()
 
     @Published var sectionTargetID: UUID?
     @Published var sidebarGroupID: UUID?
     @Published var quickToolTarget = false
+    /// App being dragged, captured when the drag starts so tiles can make room for it.
+    var sourcePath: String?
+    /// Last tile the reflow ran against, so the same pair is never repeated.
+    var lastReflowTarget: String?
+
     /// True for the whole drag, not just while a target is under the cursor.
     /// The remove strips stay visible for the entire drag so they cannot flicker
     /// when the cursor crosses their edge.
-    @Published var isDragging = false
+    var isDragging: Bool { DragActivity.shared.isActive }
 
-    private var endWork: DispatchWorkItem?
+    /// Called by the card's own gesture, which fires before the drop session takes
+    /// over the mouse: it is the only reliable "this app started moving" signal.
+    func beginAppDrag(path: String) {
+        guard sourcePath == nil else { return }
+        sourcePath = path
+        lastReflowTarget = nil
+        DragActivity.shared.begin()
+    }
 
     var isReordering: Bool {
         sectionTargetID != nil || sidebarGroupID != nil
@@ -44,32 +92,25 @@ final class DragHighlight: ObservableObject {
 
     /// Called by every drop destination while the cursor is over it.
     func setHover(_ isTargeted: Bool) {
-        endWork?.cancel()
         if isTargeted {
-            isDragging = true
-            return
+            DragActivity.shared.begin()
+        } else {
+            DragActivity.shared.scheduleEnd()
         }
-        // Leaving a target may just mean the cursor moved to another one, so the flag
-        // only clears after a short pause with nothing hovered.
-        let work = DispatchWorkItem { self.isDragging = false }
-        endWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: work)
     }
 
     /// Called once a drop has been handled, so the strips retract immediately.
     func endDrag() {
-        endWork?.cancel()
-        endWork = nil
-        isDragging = false
-        sectionTargetID = nil
-        sidebarGroupID = nil
-        quickToolTarget = false
+        DragActivity.shared.end()
+        clear()
     }
 
     func clear() {
         sectionTargetID = nil
         sidebarGroupID = nil
         quickToolTarget = false
+        sourcePath = nil
+        lastReflowTarget = nil
     }
 }
 
@@ -801,13 +842,48 @@ struct ContentView: View {
                     if let path = paths.first {
                         DropAnimator.shared.playGrid(groupID: sectionGroupID, path: path)
                     }
+                    // The live reflow during hover skips persisting, so the final
+                    // commit is written here.
+                    store.persistGroups()
                     highlight.endDrag()
                     return true
                 } isTargeted: { isTargeted in
                     highlight.setHover(isTargeted)
+                    guard isTargeted else { return }
+                    // The drag always begins under the tile being dragged, so the first
+                    // tile to report itself is the one the user picked up. Remembering it
+                    // lets the others shuffle out of the way as the pointer travels.
+                    if highlight.sourcePath == nil { highlight.beginAppDrag(path: app.path) }
+                    makeRoom(for: app, in: sectionGroupID)
                 }
         } else {
             card
+        }
+    }
+
+    /// Launchpad-style make-way: while an app is dragged inside its own group, the
+    /// tiles it passes shuffle aside immediately, so the gap shows where it will land
+    /// instead of only hinting at it after release.
+    ///
+    /// Only same-group drags reflow. Cross-group and outside apps are filed on drop,
+    /// because their old position has no meaning in this section.
+    private func makeRoom(for target: AppItem, in groupID: UUID) {
+        guard let sourcePath = highlight.sourcePath, sourcePath != target.path else { return }
+        // Resolved through the store so cached paths and normalized paths compare equal.
+        let list = store.orderedApps(in: groupID)
+        guard let from = list.firstIndex(where: { $0.path == sourcePath }) else { return }
+
+        guard let to = list.firstIndex(where: { $0.path == target.path }), to != from else { return }
+        // Already sitting directly in front of the hovered tile: the order would not
+        // change, and re-running it would fight the shuffle.
+        if to - from == 1 { return }
+        // The same pair never runs twice in a row; the tile under the cursor reports
+        // itself repeatedly while the pointer rests.
+        if highlight.lastReflowTarget == target.path { return }
+
+        highlight.lastReflowTarget = target.path
+        withAnimation(.easeOut(duration: 0.22)) {
+            store.moveApps([sourcePath], before: target, in: groupID, persist: false)
         }
     }
 
@@ -1286,6 +1362,9 @@ private struct AppCard: View {
     let onForceQuit: (() -> Void)?
 
     @ObservedObject private var animator = DropAnimator.shared
+    /// Only the drag on/off flag, never the highlight object: that one changes on
+    /// every pointer move and would repaint the whole grid mid-drag.
+    @ObservedObject private var activity = DragActivity.shared
     @State private var isHovering = false
     @State private var popScale: CGFloat = 1
     @State private var popOpacity: Double = 1
@@ -1296,6 +1375,9 @@ private struct AppCard: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+        // Disk usage is only measured once the tile is actually on screen, so scrolling
+        // through hundreds of apps never queues work for apps nobody looked at.
+        .onAppear { AppMetrics.shared.requestSizeIfNeeded(for: app) }
         .contextMenu {
             Button(L10n.shared.t("打开"), systemImage: "arrow.up.right") { onOpen() }
             Button(L10n.shared.t("加入其他分组"), systemImage: "folder.badge.plus") { onMove() }
@@ -1328,6 +1410,14 @@ private struct AppCard: View {
             Button(L10n.shared.t("在 Finder 中显示"), systemImage: "folder") { onShowInFinder() }
         }
         .help(L10n.shared.t("打开") + " \(app.name)")
+    }
+
+    /// Accent round the tile while dragging, so every drop target reads as its own slot.
+    /// A system separator is used rather than a fixed black stroke, which would vanish
+    /// in dark mode.
+    private var dragOutline: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
     }
 
     /// Launchpad-style tile: a large icon, a centred name, and one quiet info line.
@@ -1367,6 +1457,9 @@ private struct AppCard: View {
         .frame(maxWidth: .infinity, minHeight: 158, alignment: .top)
         .background(hoverBackground)
         .contentShape(RoundedRectangle(cornerRadius: 12))
+        // Every tile shows its bounds while dragging, so where an icon will land is
+        // obvious before releasing it.
+        .overlay { if activity.isActive { dragOutline } }
         // No animated shadow or scale: animating those on two hundred tiles at once is
         // what made hovering and dragging feel heavy.
         .scaleEffect(isHovering ? 1.015 : 1)
@@ -1394,9 +1487,17 @@ private struct AppCard: View {
     /// Category, disk usage, and memory share one small line. The category is only
     /// repeated when the tile is not already sitting inside that group's section.
     private struct AppUsageLine: View {
-        @ObservedObject private var metrics = AppMetrics.shared
+        /// Watches only this app's numbers, so another app's measurement landing
+        /// never repaints this tile during a scroll.
+        @ObservedObject private var stat: AppStat
         let app: AppItem
         let showsCategory: Bool
+
+        init(app: AppItem, showsCategory: Bool) {
+            self.app = app
+            self.showsCategory = showsCategory
+            _stat = ObservedObject(wrappedValue: AppMetrics.shared.stat(for: app.path))
+        }
 
         var body: some View {
             HStack(spacing: 4) {
@@ -1407,13 +1508,13 @@ private struct AppCard: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                Text(metrics.sizeText(for: app.path))
+                Text(stat.sizeText)
                     .foregroundStyle(.secondary)
 
                 if app.isRunning {
                     Text("·")
                         .foregroundStyle(.tertiary)
-                    Text(metrics.memoryText(for: app.path))
+                    Text(stat.memoryText)
                         .foregroundStyle(AppShelfPalette.success)
                 }
             }
@@ -1467,6 +1568,8 @@ private struct AppIconView: View {
 /// the group instead of filing it in, so grouping can be undone by dragging alone.
 private struct RemoveFromGroupStrip: View {
     @ObservedObject private var highlight = DragHighlight.shared
+    /// The strip appears for the whole drag, and this flag changes only twice per drag.
+    @ObservedObject private var activity = DragActivity.shared
 
     let groupID: UUID
     let onRemove: ([String]) -> Void
@@ -1481,7 +1584,7 @@ private struct RemoveFromGroupStrip: View {
     var body: some View {
         // Visible for the whole drag; only the fill follows the cursor. The frame is
         // always reserved (faint hint when idle) so there is no relayout mid-drag.
-        let isVisible = highlight.isDragging || isTargeted
+        let isVisible = activity.isActive || isTargeted
 
         VStack(spacing: 0) {
             if isVisible {
