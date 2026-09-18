@@ -5,3 +5,8 @@ dist/
 *.xcuserstate
 DerivedData/
 .swiftpm/
+
+# Release artefacts are published to GitHub Releases by .github/workflows/release.yml,
+# not committed. Keeping DMGs out of history is what lets the repo stay small.
+release/
+ANALYSIS.md
