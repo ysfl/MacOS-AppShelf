@@ -755,11 +755,16 @@ struct ContentView: View {
             } label: {
                 Image(systemName: Appearance.shared.mode.symbol)
                     .font(.system(size: 14, weight: .semibold))
+                    .accessibilityLabel(L10n.shared.t("appearance"))
             }
+            // `accessibilityLabel` on the Menu itself makes `.borderlessButton` lay its
+            // indicator out at the far edge of the space it is offered, which tore the
+            // header apart. Labelling the image and pinning the size keeps it a tile.
             .menuStyle(.borderlessButton)
+            .menuIndicator(.visible)
+            .fixedSize()
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .accessibilityLabel(L10n.shared.t("appearance"))
             .help(L10n.shared.t("appearance"))
 
             // Language switch: pick a bundled or external language.
@@ -783,11 +788,13 @@ struct ContentView: View {
             } label: {
                 Image(systemName: "globe")
                     .font(.system(size: 14, weight: .semibold))
+                    .accessibilityLabel(L10n.shared.t("language"))
             }
             .menuStyle(.borderlessButton)
+            .menuIndicator(.visible)
+            .fixedSize()
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .accessibilityLabel(L10n.shared.t("language"))
             .help(L10n.shared.t("language"))
 
             Button(action: { SettingsWindowController.shared.showWindow() }) {
