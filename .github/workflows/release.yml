@@ -1,0 +1,49 @@
+name: Release
+
+# Tag-driven only: pushing code must never publish anything to a public repo.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    name: Package and publish
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+
+      - name: Test before packaging
+        run: swift test
+
+      # VERSION is the tag, and build-release.sh refuses if CHANGELOG.md documents a
+      # different latest version. That guard exists because a 1.2.0 DMG once shipped a
+      # bundle whose Info.plist still said 1.1.0.
+      - name: Build the DMG
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          ./Scripts/build-release.sh "$version"
+          echo "DMG=release/AppShelf-$version.dmg" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Verify the package
+        run: |
+          set -euo pipefail
+          (cd release && shasum -a 256 -c SHA256SUMS)
+          hdiutil verify "$DMG"
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" "$DMG" release/SHA256SUMS --clobber
+          else
+            gh release create "v$VERSION" "$DMG" release/SHA256SUMS \
+              --title "AppShelf $VERSION" \
+              --notes-file <(awk '/^## /{n++} n==1{print} n>1{exit}' CHANGELOG.md)
+          fi

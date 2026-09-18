@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test (macOS 14)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+
+      # The project's own contribution gate is a warning-free build, so CI enforces it
+      # rather than relying on whoever remembers the flag.
+      - name: Build (warnings as errors)
+        run: swift build -c debug -Xswiftc -warnings-as-errors
+
+      - name: Test AppShelfCore
+        run: swift test
+
+      # Assembles the real .app: icon generation, Info.plist version write-back, ad-hoc
+      # signing. Catches bundle-level breakage a plain `swift build` cannot see.
+      - name: Build app bundle
+        run: ./Scripts/build-app.sh release
+
+      - name: Assert the bundle reports a version
+        run: |
+          set -euo pipefail
+          version=$(plutil -extract CFBundleShortVersionString raw dist/AppShelf.app/Contents/Info.plist)
+          echo "bundle version: $version"
+          test "$version" != "1.1.0" || {
+            echo "The bundle still carries the placeholder version." >&2; exit 1; }
+          test -n "$version"
+
+      - name: Upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppShelf-debug
+          path: dist/AppShelf.app
+          retention-days: 7
