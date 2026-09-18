@@ -1,0 +1,10 @@
+#!/bin/sh
+# Hooks are bypassable, so CI repeats the whole sweep. This one still runs the full set:
+# a leak or a stub should be caught before it ever leaves the machine.
+range="${1:-}"
+if [ -n "$range" ]; then
+  set -- $range
+  python3 Scripts/gates/gates.py "$2" --quiet || exit 1
+else
+  python3 Scripts/gates/gates.py all --quiet || exit 1
+fi

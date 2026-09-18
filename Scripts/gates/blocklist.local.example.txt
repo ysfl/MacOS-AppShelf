@@ -1,0 +1,8 @@
+# Copy to blocklist.local.txt (gitignored) and list one term per line.
+# Terms here are matched case-insensitively against every tracked text file and
+# against staged additions. Keep this file out of the repository: a committed list of
+# things that must not appear would itself disclose them.
+#
+# Typical contents: private hostnames, internal project codenames, colleague names,
+# paths belonging to non-public workspaces.
+internal.example

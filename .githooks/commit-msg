@@ -1,0 +1,25 @@
+#!/bin/sh
+# Type prefix, a 72-character subject, and a body that says why.
+file="$1"
+python3 - "$file" <<'PY'
+import re, sys
+from pathlib import Path
+lines = Path(sys.argv[1]).read_text().split("\n")
+subject = next((l for l in lines if l.strip() and not l.startswith("#")), "")
+body = "\n".join(l for l in lines[1:] if l.strip() and not l.startswith("#")).strip()
+errors = []
+TYPES = ("feat", "fix", "refactor", "perf", "test", "docs", "build", "ci", "chore")
+if not re.match(rf"^({'|'.join(TYPES)})(\([^)]*\))?[!]?: .+", subject):
+    errors.append(f"subject must start with one of: {', '.join(TYPES)} + ': '")
+if len(subject) > 72:
+    errors.append(f"subject is {len(subject)} characters; cap is 72")
+if re.search(r"[，。；]$", subject):
+    errors.append("subject must not end in punctuation")
+if not body and not re.match(r"^(docs|chore|ci):", subject):
+    errors.append("body is empty; say why the change exists, not only what moved")
+if errors:
+    print("commit-msg gate:", file=sys.stderr)
+    for e in errors:
+        print(f"  - {e}", file=sys.stderr)
+    sys.exit(1)
+PY

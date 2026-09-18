@@ -1,0 +1,21 @@
+{
+  "_comment": "Each entry needs all six fields. Missing fields, wildcards, absolute paths, placeholder reasons and expired dates are errors, not passes.",
+  "exemptions": [
+    {
+      "path": "Sources/AppShelf/ContentView.swift",
+      "check": "file-size",
+      "reason": "窗口壳层与 12 个 @State 共享同一结构体；再拆需要把状态提到共享模型里，属于行为改动而不是文件移动，排在 1.4 之后",
+      "owner": "ysfl",
+      "cap": 1000,
+      "expires": "2026-12-18"
+    },
+    {
+      "path": "Scripts/gates/gates.py",
+      "check": "file-size",
+      "reason": "门禁刻意保持单文件零依赖，克隆下来直接就能跑；拆成包需要引入 import 路径设置，收益不抵复杂度",
+      "owner": "ysfl",
+      "cap": 650,
+      "expires": "2027-03-18"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Cheap, high-signal checks on what is about to be committed. The slow full sweep runs in
+# CI, because a hook people work around is worse than a hook that covers less.
+exec python3 Scripts/gates/gates.py precommit --quiet

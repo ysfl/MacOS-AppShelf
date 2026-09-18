@@ -10,3 +10,7 @@ DerivedData/
 # not committed. Keeping DMGs out of history is what lets the repo stay small.
 release/
 ANALYSIS.md
+
+# Gate inputs that must never be public: the internal-name blocklist is read by
+# Scripts/gates/gates.py but committing it would disclose exactly what it hides.
+Scripts/gates/blocklist.local.txt
