@@ -70,7 +70,6 @@ public enum ShelfImportReport: Equatable, Sendable {
         case duplicateGroupID
         /// A quick tool id pointed at nothing we could resolve.
         case unresolvedQuickToolID(String)
-        case hiddenPathNotNormalized(String)
     }
 }
 

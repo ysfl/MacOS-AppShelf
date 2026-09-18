@@ -16,8 +16,6 @@ enum AppShelfPalette {
 
     /// Hairline separating a control from the surface it sits on. Legible in both appearances.
     static let border = Color(nsColor: .separatorColor)
-    /// A softer line for decorative dividers.
-    static let hairline = Color(nsColor: .separatorColor).opacity(0.6)
 
     static let accent = Color(red: 0.12, green: 0.42, blue: 0.86)
     static let success = Color(red: 0.12, green: 0.60, blue: 0.42)

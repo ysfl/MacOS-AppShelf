@@ -12,10 +12,6 @@ public struct HiddenAppList: Equatable, Codable, Sendable {
         self.paths = Set(paths.map(ShelfPath.normalize))
     }
 
-    public init(paths: Set<String>) {
-        self.paths = Set(paths.map(ShelfPath.normalize))
-    }
-
     public func contains(_ path: String) -> Bool { paths.contains(ShelfPath.normalize(path)) }
     public var isEmpty: Bool { paths.isEmpty }
     public var count: Int { paths.count }

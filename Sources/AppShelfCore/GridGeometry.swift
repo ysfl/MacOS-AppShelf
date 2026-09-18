@@ -64,10 +64,6 @@ public struct GridMetricsSpec: Equatable, Sendable {
     /// Comfortable default: Launchpad-like tiles that reflow with the window width.
     public static let standard = GridMetricsSpec(minimum: 136, maximum: 176, columnSpacing: 14, rowSpacing: 16)
 
-    /// Roomier and tighter variants offered as a density preference.
-    public static let spacious = GridMetricsSpec(minimum: 168, maximum: 214, columnSpacing: 18, rowSpacing: 20)
-    public static let compact = GridMetricsSpec(minimum: 112, maximum: 142, columnSpacing: 10, rowSpacing: 12)
-
     public func measure(width: Double, height: Double, count: Int) -> GridGeometry? {
         GridGeometry.measure(width: width, height: height, count: count,
                              minimum: minimum, maximum: maximum,

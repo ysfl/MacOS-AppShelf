@@ -116,8 +116,9 @@ final class QuickToolStore: ObservableObject {
 
     /// Removes a tool from the row. Built-ins are only hidden; user-added tools are deleted.
     ///
-    /// Returns the deleted entry so the caller can offer it back: drag-out used to destroy
-    /// a custom tool with no confirmation and no way back.
+    /// The deleted entry comes back from `undo`, which snapshots the whole quick-tool list
+    /// before the drop handler calls this. Drag-out used to destroy a custom tool with no
+    /// confirmation and no way back.
     @discardableResult
     func remove(_ id: String) -> CustomQuickTool? {
         guard let tool = customTool(for: id) else {
@@ -136,14 +137,6 @@ final class QuickToolStore: ObservableObject {
     func removeCustom(id: UUID) {
         customTools.removeAll { $0.id == id }
         enabledIDs.removeAll { $0 == QuickToolID(id).rawValue }
-        persist()
-    }
-
-    func restoreCustom(_ tool: CustomQuickTool) {
-        guard !customTools.contains(where: { $0.id == tool.id }) else { return }
-        customTools.append(tool)
-        let id = QuickToolID(tool.id).rawValue
-        if !enabledIDs.contains(id) { enabledIDs.append(id) }
         persist()
     }
 
