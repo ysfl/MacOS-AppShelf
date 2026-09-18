@@ -13,25 +13,31 @@ permissions:
 jobs:
   release:
     name: Package and publish
-    runs-on: macos-15
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
 
-      # swift-testing needs a Swift 6 toolchain. Prefer an installed Xcode 16+ on the
-      # runner image and fall back to whatever the image defaults to, so the workflow
-      # does not rot when GitHub bumps the image's Xcode.
-      - name: Select a Swift 6 toolchain
+      # AppKit signatures differ between SDKs, so a build that is clean on one Swift 6
+      # compiler can fail on another. Pin to the toolchain this project is developed and
+      # reviewed against, and fail loudly rather than confusingly when it is absent.
+      - name: Select the pinned toolchain
         run: |
           set -euo pipefail
-          candidate="$(ls -d /Applications/Xcode_1[6-9]*.app 2>/dev/null | sort | tail -1 || true)"
+          echo "available Xcode:"; ls -d /Applications/Xcode_*.app 2>/dev/null | sed 's/^/  /' || true
+          candidate="$(ls -d /Applications/Xcode_[0-9]*.app 2>/dev/null \
+            | sort -t_ -k2 -V | tail -1 || true)"
           if [ -n "$candidate" ]; then
             sudo xcode-select -s "$candidate/Contents/Developer"
           fi
           swift --version
-          swift --version | grep -q "Swift version 6\." || {
-            echo "A Swift 6 toolchain is required." >&2
+          major_minor="$(swift --version 2>&1 | sed -nE 's/.*Swift version ([0-9]+)\.([0-9]+).*/\1.\2/p')"
+          echo "detected Swift $major_minor; requiring >= $PIN_SWIFT"
+          printf '%s\n' "$PIN_SWIFT" "$major_minor" | sort -V -C && echo "toolchain ok" || {
+            echo "Toolchain too old: need Swift $PIN_SWIFT, found $major_minor" >&2
             exit 1
           }
+        env:
+          PIN_SWIFT: 6.2
 
       - name: Test before packaging
         run: swift test
