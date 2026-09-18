@@ -68,11 +68,13 @@ final class QuickToolStore: ObservableObject {
             enabledIDs = Self.builtinIDs
         }
 
-        if let data = defaults.data(forKey: ShelfDefaults.quickToolsCustom),
-           let saved = try? JSONDecoder().decode([CustomQuickTool].self, from: data) {
-            customTools = saved
-        } else {
-            customTools = []
+        customTools = []
+        if let data = defaults.data(forKey: ShelfDefaults.quickToolsCustom) {
+            do {
+                customTools = try JSONDecoder().decode([CustomQuickTool].self, from: data)
+            } catch {
+                ShelfLog.state.error("Custom quick tools unreadable, starting empty: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
@@ -164,7 +166,10 @@ final class QuickToolStore: ObservableObject {
     private func persist() {
         let defaults = UserDefaults.standard
         defaults.set(enabledIDs, forKey: ShelfDefaults.quickToolsEnabled)
-        guard let data = try? JSONEncoder().encode(customTools) else { return }
-        defaults.set(data, forKey: ShelfDefaults.quickToolsCustom)
+        do {
+            defaults.set(try JSONEncoder().encode(customTools), forKey: ShelfDefaults.quickToolsCustom)
+        } catch {
+            ShelfLog.state.error("Custom quick tools were not saved: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }

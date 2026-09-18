@@ -502,6 +502,7 @@ struct SettingsView: View {
             try payload.write(to: url, options: .atomic)
             importReport = L10n.shared.t("export_written", args: ["path": url.path])
         } catch {
+            ShelfLog.transfer.error("Export to \(url.path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             importReport = L10n.shared.t("export_failed", args: ["reason": error.localizedDescription])
         }
     }
@@ -514,9 +515,16 @@ struct SettingsView: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
 
-        guard let store, panel.runModal() == .OK, let url = panel.url,
-              let data = try? Data(contentsOf: url),
-              let payload = ShelfImport.decode(data) else {
+        guard let store, panel.runModal() == .OK, let url = panel.url else { return }
+        let payload: ShelfExport?
+        do {
+            payload = ShelfImport.decode(try Data(contentsOf: url))
+        } catch {
+            ShelfLog.transfer.error("Import from \(url.lastPathComponent, privacy: .public) could not be read: \(error.localizedDescription, privacy: .public)")
+            payload = nil
+        }
+        guard let payload else {
+            ShelfLog.transfer.error("Import rejected: \(url.lastPathComponent, privacy: .public) is not a shelf backup.")
             importReport = L10n.shared.t("import_unreadable")
             return
         }

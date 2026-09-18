@@ -73,6 +73,7 @@ enum AppDiscoveryService {
             // An app bundle is a package. Do not descend into its embedded helper bundles.
             enumerator.skipDescendants()
         }
+        ShelfLog.discovery.log("Scanned \(root.path, privacy: .public): \(results.count) bundles")
         return results
     }
 
@@ -713,30 +714,51 @@ final class LauncherStore: ObservableObject {
 
     private func loadState() {
         let defaults = UserDefaults.standard
-        if let data = defaults.data(forKey: ShelfDefaults.groupState),
-           let saved = try? JSONDecoder().decode([AppGroup].self, from: data),
-           !saved.isEmpty {
-            groups = saved
-            loadedPersistedState = true
-        } else {
-            groups = DefaultGroups.make()
+        groups = DefaultGroups.make()
+
+        if let data = defaults.data(forKey: ShelfDefaults.groupState) {
+            do {
+                let saved = try JSONDecoder().decode([AppGroup].self, from: data)
+                if saved.isEmpty {
+                    ShelfLog.state.warning("Stored group list is empty; keeping the starter groups.")
+                } else {
+                    groups = saved
+                    loadedPersistedState = true
+                }
+            } catch {
+                ShelfLog.state.error(
+                    "Group state could not be decoded, falling back to starter groups: \(error.localizedDescription, privacy: .public)"
+                )
+            }
         }
 
-        if let data = defaults.data(forKey: ShelfDefaults.hiddenApps),
-           let saved = try? JSONDecoder().decode([String].self, from: data) {
-            hidden = HiddenAppList(paths: saved)
+        if let data = defaults.data(forKey: ShelfDefaults.hiddenApps) {
+            do {
+                hidden = HiddenAppList(paths: try JSONDecoder().decode([String].self, from: data))
+            } catch {
+                ShelfLog.state.error(
+                    "Hidden-app list could not be decoded, treating it as empty: \(error.localizedDescription, privacy: .public)"
+                )
+            }
         }
     }
 
     /// Encode only the small, user-editable group model; bundle metadata is never persisted.
     private func persistState() {
-        guard let data = try? JSONEncoder().encode(groups) else { return }
-        UserDefaults.standard.set(data, forKey: ShelfDefaults.groupState)
+        do {
+            UserDefaults.standard.set(try JSONEncoder().encode(groups), forKey: ShelfDefaults.groupState)
+        } catch {
+            ShelfLog.state.error("Group state was not saved: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func persistHidden() {
-        guard let data = try? JSONEncoder().encode(Array(hidden.paths).sorted()) else { return }
-        UserDefaults.standard.set(data, forKey: ShelfDefaults.hiddenApps)
+        do {
+            UserDefaults.standard.set(try JSONEncoder().encode(Array(hidden.paths).sorted()),
+                                      forKey: ShelfDefaults.hiddenApps)
+        } catch {
+            ShelfLog.state.error("Hidden-app list was not saved: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func assignInitialGroups(for discovered: [AppItem]) {

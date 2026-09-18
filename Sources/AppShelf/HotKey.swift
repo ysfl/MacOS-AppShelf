@@ -66,6 +66,9 @@ final class HotKeyCenter {
             0,
             &reference
         )
+        if status != noErr {
+            ShelfLog.hotkey.error("Carbon refused keyCode \(shortcut.keyCode) with modifiers \(shortcut.carbonModifiers): OSStatus \(status). Usually another app owns it.")
+        }
         return status == noErr
     }
 
@@ -126,7 +129,10 @@ final class HotKeyStore: ObservableObject {
     func clear() { shortcut = .disabled }
 
     private func persistShortcut() {
-        guard let data = HotKeyCodec.encode(shortcut) else { return }
+        guard let data = HotKeyCodec.encode(shortcut) else {
+            ShelfLog.hotkey.error("Shortcut could not be encoded; the choice will not survive relaunch.")
+            return
+        }
         UserDefaults.standard.set(data, forKey: ShelfDefaults.hotKey)
     }
 }

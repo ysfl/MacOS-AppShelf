@@ -35,6 +35,14 @@ cp "$PROJECT_DIR/Info.plist" "$APP_PATH/Contents/Info.plist"
 mkdir -p "$APP_PATH/Contents/Resources/Localization"
 cp "$PROJECT_DIR/Resources/Localization"/*.json "$APP_PATH/Contents/Resources/Localization/" 2>/dev/null || true
 
+# Per-language InfoPlist.strings drives the name Finder, the Dock and the window title
+# bar show. Without it the bundle reports one fixed name in every system language.
+for lproj in "$PROJECT_DIR"/Resources/Bundle/*.lproj; do
+    [ -d "$lproj" ] || continue
+    mkdir -p "$APP_PATH/Contents/Resources/$(basename "$lproj")"
+    cp "$lproj"/*.strings "$APP_PATH/Contents/Resources/$(basename "$lproj")/"
+done
+
 ICON_MASTER="$ICON_WORK/icon_1024x1024.png"
 ICON_SET="$ICON_WORK/AppIcon.iconset"
 mkdir -p "$ICON_SET"

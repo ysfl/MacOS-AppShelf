@@ -26,7 +26,10 @@ enum ProcessMemory {
         // Ask for nothing to learn the real count first: the previous fixed 4096 slot
         // buffer truncated silently on machines with more processes than that.
         let count = proc_listallpids(nil, 0)
-        guard count > 0 else { return [] }
+        guard count > 0 else {
+            ShelfLog.metrics.error("Process enumeration returned no pids; memory readouts stay stale.")
+            return []
+        }
 
         var pids = [Int32](repeating: 0, count: Int(count))
         let written = proc_listallpids(&pids, count * Int32(MemoryLayout<Int32>.stride))
@@ -253,8 +256,11 @@ final class AppMetrics: ObservableObject {
         saveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            guard let data = try? JSONEncoder().encode(self.records) else { return }
-            self.defaults.set(data, forKey: ShelfDefaults.sizeCache)
+            do {
+                self.defaults.set(try JSONEncoder().encode(self.records), forKey: ShelfDefaults.sizeCache)
+            } catch {
+                ShelfLog.metrics.error("Size cache not written: \(error.localizedDescription, privacy: .public)")
+            }
         }
         saveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)

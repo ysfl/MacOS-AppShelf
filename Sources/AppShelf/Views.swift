@@ -444,6 +444,9 @@ struct ContentView: View {
         }
         .background(AppShelfPalette.canvas)
         .frame(minWidth: 980, minHeight: 620)
+        // The window title follows the in-app language, not just the system one, so
+        // switching to English renames the title bar immediately.
+        .navigationTitle(L10n.shared.t("应用架"))
         .onReceive(refreshTimer) { _ in
             store.refreshRunningState()
         }

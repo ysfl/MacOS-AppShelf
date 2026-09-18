@@ -81,9 +81,18 @@ final class L10n: ObservableObject {
     /// Number of languages found in the external folder, for the settings panel's feedback.
     var externalLanguageCount: Int { external.keys.count }
 
+    /// A malformed language file is skipped rather than aborting the whole load, but the
+    /// reason has to be findable: a silently missing translation is otherwise invisible.
     private static func loadFile(_ url: URL) -> [String: String]? {
-        guard let data = try? Data(contentsOf: url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            ShelfLog.l10n.error("Cannot read \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+            ShelfLog.l10n.error("\(url.lastPathComponent, privacy: .public) is not a string-to-string JSON table; skipped.")
             return nil
         }
         return obj
