@@ -4,20 +4,22 @@
 
 AppShelf is a native macOS app launcher. It reads `.app` bundles from common application folders, organizes them into groups, and opens them from a searchable grid. It features a Launchpad-style tile layout, drag-to-group, disk and memory usage, pinyin search, a global search panel, and a Chinese / English interface.
 
-当前版本 / Current version: `1.2.0`
+当前版本 / Current version: `1.3.0`
 
-## 1.2.0 的新变化 / What's new in 1.2.0
+## 1.3.0 的新变化 / What's new in 1.3.0
 
-- 多语言支持：内置中文与英文，标题栏一键切换，无需重启。翻译按语种拆成独立文件，支持外部扩展。
-  Multi-language: Chinese and English ship with the app and switch from the toolbar without restarting. Translations live in one file per language and can be extended externally.
-- 明暗模式切换：可跟随系统，或强制浅色 / 深色。
-  Appearance: follow the system, or force light / dark.
-- 拖拽体验对齐启动台：整张卡片跟随光标，沿途图标自动让位，分组边框常亮指示落点。
-  Launchpad-style dragging: the whole card follows the cursor, tiles on the path slide aside, and the target block stays lit.
-- 列表性能优化：磁盘占用改为按卡片懒加载，进程内存扫描移出主线程，滚动更顺滑。
-  Performance: disk usage is loaded lazily per tile and the process scan moved off the main thread, so scrolling is smoother.
-- 搜索时按 `esc` 退出搜索；拖拽状态增加了 esc / 松手 / 滚动等多重兜底，不会再卡住。
-  `esc` exits search; drag state now has esc, mouse-release, and scroll fallbacks so it can no longer get stuck.
+- 主窗口键盘导航：↑↓ 选卡片，回车打开，`esc` 退出，⌘F 聚焦搜索，⌘1 至 ⌘9 切换分组，⌘Z 撤销。
+  Keyboard navigation in the main window: ↑↓ to pick a tile, Return to open, `esc` to back out, ⌘F to search, ⌘1–⌘9 for groups, ⌘Z to undo.
+- 可以隐藏应用：隐藏后不出现在列表和搜索结果里，侧栏“已隐藏”页负责找回。
+  Hide apps: they leave the list and the search results, and the Hidden view brings them back.
+- 支持从访达把 `.app` 直接拖进分组、分区或快捷工具区。
+  Drop `.app` bundles straight from Finder onto a group, a section, or the quick tool row.
+- 分组设置可导出为 JSON 备份，换一台 Mac 可以导入还原。
+  Group settings export to JSON and import back, so a new Mac can start from your arrangement.
+- 刷新不再冻结界面：应用扫描移到后台，“正在读取应用…”也终于能显示出来。
+  Refreshing no longer freezes the interface: discovery moved off the main thread, and the loading state now actually appears.
+- 深色模式描边、落位动画、磁盘占用取整、拼音结果顺序等一批修正，外加 80 个单元测试。
+  A round of fixes — dark-mode strokes, landing animations, byte rounding, pinyin result order — plus 80 unit tests.
 
 ## About
 
@@ -31,8 +33,8 @@ If you switch between Finder, Launchpad, and Spotlight to find apps, AppShelf gi
 - Scans `/Applications`, `/System/Applications`, and `~/Applications`, while filtering background agents and menu-bar helpers.
 - 首次启动按常用、开发、沟通、创作、日常、工具建立分组；分类只是初始建议，可以自行调整。
 - Creates starter groups for common, development, communication, creative, everyday, and utility apps. The categories are suggestions and can be changed.
-- 支持搜索、仅看正在运行的应用、显示应用图标和实时运行状态。
-- Supports search, running-only filtering, app icons, and live running status.
+- 支持搜索、仅看正在运行的应用、隐藏不想看到的应用、显示应用图标和实时运行状态。
+- Supports search, running-only filtering, hiding apps you do not want, app icons, and live running status.
 - 可以新建、编辑和删除分组，设置名称、SF Symbol 图标和颜色。
 - Lets you create, edit, and delete groups with a name, an SF Symbol, and a color.
 - 右键菜单支持加入其他分组、从当前分组移除、在 Finder 中显示。
@@ -94,8 +96,8 @@ The same path is shown in the Settings panel. External files override the bundle
 
 ## 安装 / Install
 
-1. 下载 [AppShelf-1.2.0.dmg](release/AppShelf-1.2.0.dmg)，然后打开 DMG。
-   Download [AppShelf-1.2.0.dmg](release/AppShelf-1.2.0.dmg) and open the DMG.
+1. 下载 [AppShelf-1.3.0.dmg](release/AppShelf-1.3.0.dmg)，然后打开 DMG。
+   Download [AppShelf-1.3.0.dmg](release/AppShelf-1.3.0.dmg) and open the DMG.
 2. 把“应用架”拖到“应用程序”文件夹。
    Drag “应用架” to the Applications folder.
 3. 首次打开使用 Finder 右键菜单中的“打开”。发布包使用 ad-hoc 签名，未经过 Apple notarization；应用架不会请求额外系统权限。
@@ -113,8 +115,8 @@ The release checksum is in [`release/SHA256SUMS`](release/SHA256SUMS).
 - A Swift 6.0 toolchain. Xcode 16 or newer is suitable, as are Xcode Command Line Tools that provide a matching Swift toolchain.
 - 构建脚本会使用 macOS 自带的 `swift`、`sips`、`iconutil`、`codesign` 和 `hdiutil`。
 - The build scripts use the macOS-provided `swift`, `sips`, `iconutil`, `codesign`, and `hdiutil` tools.
-- `1.2.0` 安装包在 Apple Silicon macOS 上构建和验证，当前不是 universal binary。Intel Mac 可以尝试从源码构建，但不在此发布包的验证范围内。
-- The `1.2.0` package was built and verified on Apple Silicon macOS and is not a universal binary. Intel Macs may build from source, but are outside the verification scope of this package.
+- `1.3.0` 安装包在 Apple Silicon macOS 上构建和验证，当前不是 universal binary。Intel Mac 可以尝试从源码构建，但不在此发布包的验证范围内。
+- The `1.3.0` package was built and verified on Apple Silicon macOS and is not a universal binary. Intel Macs may build from source, but are outside the verification scope of this package.
 
 本次发布的构建验证环境：macOS 26.5.2 (arm64)、Xcode 26.2、Swift 6.2.3。它们是验证记录，不是应用的最低运行要求。
 
@@ -135,24 +137,35 @@ Run these commands from the repository root:
 
 ```bash
 swift build -c debug -Xswiftc -warnings-as-errors
+swift test
 ./Scripts/build-app.sh
 open dist/AppShelf.app
 ```
 
-生成 `1.2.0` 安装包：
+生成 `1.3.0` 安装包（版本号会写入包内 `Info.plist`，与 `CHANGELOG.md` 不一致时直接拒绝打包）：
 
-Build the `1.2.0` installer:
+Build the `1.3.0` installer. The version is written into the bundle's `Info.plist`, and the script refuses when it disagrees with `CHANGELOG.md`:
 
 ```bash
-./Scripts/build-release.sh 1.2.0
+./Scripts/build-release.sh 1.3.0
 (cd release && shasum -a 256 -c SHA256SUMS)
-hdiutil verify release/AppShelf-1.2.0.dmg
+hdiutil verify release/AppShelf-1.3.0.dmg
 ```
+
+推送 `v1.3.0` 标签会由 GitHub Actions 完成同样的校验并上传到 Release。
+
+Pushing a `v1.3.0` tag runs the same checks in GitHub Actions and publishes the result to Releases.
 
 ## 项目结构 / Project Layout
 
-- `Sources/AppShelf/Models.swift`：应用模型、目录扫描、分类、运行状态、搜索排序和分组持久化。
-- `Sources/AppShelf/Models.swift`: app models, discovery, categorization, running state, result ranking, and group persistence.
+- `Sources/AppShelfCore/`：不含界面代码的可测试内核——搜索打分、排序与栅格的索引数学、路径归一、快捷键与备份编解码、翻译回退。
+- `Sources/AppShelfCore/`: the UI-free, unit-tested core — search scoring, ordering and grid index math, path normalization, shortcut and backup codecs, and translation fallback.
+- `Tests/AppShelfCoreTests/`：内核的单元测试。
+- `Tests/AppShelfCoreTests/`: unit tests for the core.
+- `Sources/AppShelf/Models.swift`：应用模型、目录扫描、运行状态、分组持久化与撤销。
+- `Sources/AppShelf/Models.swift`: app models, discovery, running state, group persistence, and undo.
+- `Sources/AppShelf/Theme.swift`：颜色与栅格常量的唯一来源。
+- `Sources/AppShelf/Theme.swift`: the single source of colour and grid constants.
 - `Sources/AppShelf/Views.swift`：主窗口、侧边栏、应用卡片、拖拽归组和编辑面板。
 - `Sources/AppShelf/Views.swift`: the main window, sidebar, app cards, drag-to-group, and editor sheets.
 - `Sources/AppShelf/SearchMatching.swift`：拼音转换、首字母和模糊匹配的打分逻辑。
