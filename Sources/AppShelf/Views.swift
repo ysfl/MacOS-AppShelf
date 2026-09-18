@@ -31,6 +31,91 @@ extension UTType {
 /// move, so subscribing every tile to it would repaint the whole grid while dragging.
 /// This one only changes twice per drag, so tiles can safely watch it to draw their
 /// outline.
+/// Geometry of the app grid, needed to slide a tile by exactly one slot.
+///
+/// The slide is a transform, so the grid is never laid out again mid-drag. Reordering
+/// the data on every hover (the previous approach) forced a full relayout of every
+/// tile, which is why the motion felt heavy.
+final class GridMetrics: ObservableObject {
+    static let shared = GridMetrics()
+
+    /// Distance between two neighbouring column origins (column width + spacing).
+    @Published private(set) var columnStep: CGFloat = 150
+    /// Distance between two neighbouring row origins (row height + spacing).
+    @Published private(set) var rowStep: CGFloat = 174
+    @Published private(set) var columns: Int = 1
+
+    /// Must track `appGridColumns` and the grid spacings, or slides land off-target.
+    private static let minimum: CGFloat = 136
+    private static let maximum: CGFloat = 176
+    private static let columnSpacing: CGFloat = 14
+    private static let rowSpacing: CGFloat = 16
+
+    /// Mirrors `GridItem(.adaptive(minimum:maximum:))`: fit as many columns as possible
+    /// at the minimum width, then spread the leftover up to the maximum.
+    func update(width: CGFloat, height: CGFloat, count: Int) {
+        guard width > 0, count > 0 else { return }
+
+        let fitted = Int((width + Self.columnSpacing) / (Self.minimum + Self.columnSpacing))
+        let newColumns = max(1, fitted)
+        let columnWidth = (width - Self.columnSpacing * CGFloat(newColumns - 1)) / CGFloat(newColumns)
+        let clamped = min(max(columnWidth, Self.minimum), Self.maximum)
+
+        let rows = max(1, Int((Double(count) / Double(newColumns)).rounded(.up)))
+        let rowHeight = (height - Self.rowSpacing * CGFloat(rows - 1)) / CGFloat(rows)
+
+        if columns != newColumns { columns = newColumns }
+        if abs(columnStep - (clamped + Self.columnSpacing)) > 0.5 {
+            columnStep = clamped + Self.columnSpacing
+        }
+        let newRowStep = rowHeight > 0 ? rowHeight + Self.rowSpacing : Self.rowSpacing
+        if abs(rowStep - newRowStep) > 0.5 { rowStep = newRowStep }
+    }
+}
+
+/// Live state of an in-group drag: which slot was picked up, and which slot the pointer
+/// is over.
+///
+/// The data is deliberately untouched until the drop. That keeps every index stable for
+/// the whole gesture — reordering as we went made the indices move under the calculation,
+/// which is what caused the "sometimes it takes two tiles" behaviour.
+final class DragReflow: ObservableObject {
+    static let shared = DragReflow()
+
+    @Published private(set) var groupID: UUID?
+    @Published private(set) var sourceIndex: Int?
+    @Published private(set) var hoveredIndex: Int?
+
+    func begin(groupID: UUID, sourceIndex: Int) {
+        self.groupID = groupID
+        self.sourceIndex = sourceIndex
+        self.hoveredIndex = sourceIndex
+    }
+
+    /// Only the group the drag started in slides; hovering another block files the app
+    /// there on drop and must not disturb this block.
+    func hover(_ index: Int, groupID: UUID) {
+        guard self.groupID == groupID else { return }
+        guard hoveredIndex != index else { return }
+        hoveredIndex = index
+    }
+
+    func clear() {
+        groupID = nil
+        sourceIndex = nil
+        hoveredIndex = nil
+    }
+}
+
+/// Reports the grid's own size without taking part in layout.
+private struct GridSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
+}
+
 final class DragActivity: ObservableObject {
     static let shared = DragActivity()
 
@@ -58,6 +143,7 @@ final class DragActivity: ObservableObject {
         endWork = nil
         isActive = false
         sourcePath = nil
+        DragReflow.shared.clear()
     }
 
     /// Leaving one target often just means entering another, so the flag only clears
@@ -69,6 +155,7 @@ final class DragActivity: ObservableObject {
             // A drag abandoned outside any target never reaches a drop handler, so the
             // held tile has to be released here or it would stay faded.
             self.sourcePath = nil
+            DragReflow.shared.clear()
         }
         endWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: work)
@@ -83,8 +170,6 @@ final class DragHighlight: ObservableObject {
     @Published var quickToolTarget = false
     /// App being dragged, captured when the drag starts so tiles can make room for it.
     var sourcePath: String? { DragActivity.shared.sourcePath }
-    /// Last tile the reflow ran against, so the same pair is never repeated.
-    var lastReflowTarget: String?
 
     /// True for the whole drag, not just while a target is under the cursor.
     /// The remove strips stay visible for the entire drag so they cannot flicker
@@ -95,7 +180,6 @@ final class DragHighlight: ObservableObject {
     /// so the first tile to report itself is the one being carried.
     func beginAppDrag(path: String) {
         guard DragActivity.shared.sourcePath == nil else { return }
-        lastReflowTarget = nil
         DragActivity.shared.begin(path: path)
     }
 
@@ -136,7 +220,6 @@ final class DragHighlight: ObservableObject {
         sidebarGroupID = nil
         quickToolTarget = false
         // sourcePath lives on DragActivity so tiles can watch it; cleared there.
-        lastReflowTarget = nil
     }
 }
 
@@ -648,8 +731,8 @@ struct ContentView: View {
 
         // Adaptive columns use the available window width without changing tile sizes.
         return LazyVGrid(columns: appGridColumns, alignment: .leading, spacing: 16) {
-            ForEach(store.filteredApps) { app in
-                appCard(app, sectionGroupID: nil, removableGroups: membership[app.path] ?? [])
+            ForEach(Array(store.filteredApps.enumerated()), id: \.element.id) { index, app in
+                appCard(app, index: index, sectionGroupID: nil, removableGroups: membership[app.path] ?? [])
             }
         }
     }
@@ -677,9 +760,19 @@ struct ContentView: View {
             sectionHeader(section)
 
             LazyVGrid(columns: appGridColumns, alignment: .leading, spacing: 16) {
-                ForEach(section.apps) { app in
-                    appCard(app, sectionGroupID: section.groupID, removableGroups: membership[app.path] ?? [])
+                ForEach(Array(section.apps.enumerated()), id: \.element.id) { index, app in
+                    appCard(app, index: index, sectionGroupID: section.groupID, removableGroups: membership[app.path] ?? [])
                 }
+            }
+            // Measures the block so a tile can be slid by exactly one slot. Sits in the
+            // background so it never influences layout.
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: GridSizeKey.self, value: proxy.size)
+                }
+            )
+            .onPreferenceChange(GridSizeKey.self) { size in
+                GridMetrics.shared.update(width: size.width, height: size.height, count: section.apps.count)
             }
 
             // Sits below the cards (outside the grid) and stays in the layout so it
@@ -839,7 +932,7 @@ struct ContentView: View {
     /// Cards outside a section carry no drop target at all: hundreds of registered
     /// drop targets slow every mouse move during a drag.
     @ViewBuilder
-    private func appCard(_ app: AppItem, sectionGroupID: UUID?, removableGroups: [AppGroup]) -> some View {
+    private func appCard(_ app: AppItem, index: Int, sectionGroupID: UUID?, removableGroups: [AppGroup]) -> some View {
         let card = AppCard(
             app: app,
             currentGroupID: currentGroupID,
@@ -855,7 +948,9 @@ struct ContentView: View {
             },
             onShowInFinder: { store.openInFinder(app) },
             onQuit: app.isRunning ? { store.terminate(app) } : nil,
-            onForceQuit: app.isRunning ? { store.terminate(app, force: true) } : nil
+            onForceQuit: app.isRunning ? { store.terminate(app, force: true) } : nil,
+            index: index,
+            sectionGroupID: sectionGroupID
         )
         // The bundle path is the drag payload: dropping on a sidebar group files the app,
         // dropping on another card inside a section reorders it.
@@ -868,6 +963,11 @@ struct ContentView: View {
                     RoundedRectangle(cornerRadius: 12)
                         .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
                 }
+                // The preview is only built once the drag actually starts, so this is the
+                // earliest reliable "this app is the one being carried" signal. Knowing it
+                // before any hover keeps a drag from another block from being mistaken
+                // for a reorder inside this one.
+                .onAppear { highlight.beginAppDrag(path: app.path) }
         }
 
         if let sectionGroupID {
@@ -890,12 +990,12 @@ struct ContentView: View {
                     // Dropping an app here reorders it, or files it into this group from outside.
                     let paths = items.filter(\.isAppPath).map(\.value)
                     guard !paths.isEmpty else { return false }
-                    store.moveApps(paths, before: app, in: sectionGroupID)
+                    // The whole gesture only previewed the slide with transforms; this is
+                    // the one write that makes it real.
+                    commitOrder(for: paths, hovered: app, in: sectionGroupID)
                     if let path = paths.first {
                         DropAnimator.shared.playGrid(groupID: sectionGroupID, path: path)
                     }
-                    // The live reflow during hover skips persisting, so the final
-                    // commit is written here.
                     store.persistGroups()
                     highlight.endDrag()
                     return true
@@ -905,45 +1005,58 @@ struct ContentView: View {
                     // section blinked off every time the pointer crossed a tile.
                     highlight.setGroupHover(isTargeted ? sectionGroupID : nil)
                     guard isTargeted else { return }
-                    // The drag always begins under the tile being dragged, so the first
-                    // tile to report itself is the one the user picked up. Remembering it
-                    // lets the others shuffle out of the way as the pointer travels.
-                    if highlight.sourcePath == nil { highlight.beginAppDrag(path: app.path) }
-                    makeRoom(for: app, in: sectionGroupID)
+                    // Only a reorder inside this block slides anything. When the tile
+                    // under the cursor is the one being carried, it is a reorder; when it
+                    // is any other tile, the app came from outside and is just filed here.
+                    if app.path == highlight.sourcePath {
+                        if DragReflow.shared.sourceIndex == nil {
+                            DragReflow.shared.begin(groupID: sectionGroupID, sourceIndex: index)
+                        }
+                    } else if highlight.sourcePath == nil {
+                        // Fallback: no drag-start signal arrived, so the first tile to
+                        // report itself is assumed to be the one picked up.
+                        highlight.beginAppDrag(path: app.path)
+                        DragReflow.shared.begin(groupID: sectionGroupID, sourceIndex: index)
+                    }
+                    // Only records which slot the pointer is over. Nothing is reordered
+                    // yet, so the indices used for the slide cannot drift mid-gesture.
+                    DragReflow.shared.hover(index, groupID: sectionGroupID)
                 }
         } else {
             card
         }
     }
 
-    /// Launchpad-style make-way: while an app is dragged inside its own group, the
-    /// tiles it passes shuffle aside immediately, so the gap shows where it will land
-    /// instead of only hinting at it after release.
+    /// Writes the arrangement the slide has been previewing, once, on drop.
     ///
-    /// Only same-group drags reflow. Cross-group and outside apps are filed on drop,
-    /// because their old position has no meaning in this section.
-    private func makeRoom(for target: AppItem, in groupID: UUID) {
-        guard let sourcePath = highlight.sourcePath, sourcePath != target.path else { return }
-        // Resolved through the store so cached paths and normalized paths compare equal.
-        let list = store.orderedApps(in: groupID)
-        guard let from = list.firstIndex(where: { $0.path == sourcePath }) else { return }
+    /// Indices come from the untouched list the whole gesture ran against, so the app
+    /// lands in the slot the gap was sitting in. Removing the app and inserting at the
+    /// hovered index is exactly what the slide showed.
+    private func commitOrder(for paths: [String], hovered: AppItem, in groupID: UUID) {
+        // Must be the same list the slide indices came from: the grid shows the
+        // running-only subset when that filter is on, and mixing the two is what made
+        // the landing slot drift a tile.
+        let ordered = store.orderedApps(in: groupID)
+        let list = store.runningOnly ? ordered.filter(\.isRunning) : ordered
 
-        guard let to = list.firstIndex(where: { $0.path == target.path }), to != from else { return }
-        // The same pair never runs twice in a row; the tile under the cursor reports
-        // itself repeatedly while the pointer rests.
-        if highlight.lastReflowTarget == target.path { return }
+        guard let sourcePath = highlight.sourcePath,
+              let source = DragReflow.shared.sourceIndex,
+              let hoveredIndex = DragReflow.shared.hoveredIndex,
+              DragReflow.shared.groupID == groupID,
+              source != hoveredIndex,
+              source < list.count, hoveredIndex < list.count,
+              list[source].path == sourcePath else {
+            // Not a same-group reorder (or nothing moved): file it where it was dropped.
+            store.moveApps(paths, before: hovered, in: groupID)
+            return
+        }
 
-        highlight.lastReflowTarget = target.path
-        // Dragging right lands the app *behind* the tile it passes: inserting in front
-        // of that tile is a no-op once they are neighbours, and that no-op was what made
-        // the gesture feel like it needed a whole extra tile of travel. Dragging left
-        // still inserts in front, so one tile of travel always swaps a pair.
-        withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.82)) {
-            if to > from {
-                store.moveApps([sourcePath], after: target, in: groupID, persist: false)
-            } else {
-                store.moveApps([sourcePath], before: target, in: groupID, persist: false)
-            }
+        if hoveredIndex > source {
+            // Lands behind the tile it passed; inserting in front of it is a no-op once
+            // they are neighbours.
+            store.moveApps(paths, after: list[hoveredIndex], in: groupID)
+        } else {
+            store.moveApps(paths, before: list[hoveredIndex], in: groupID)
         }
     }
 
@@ -1523,15 +1636,70 @@ private struct AppCard: View {
     /// Only the drag on/off flag, never the highlight object: that one changes on
     /// every pointer move and would repaint the whole grid mid-drag.
     @ObservedObject private var activity = DragActivity.shared
+    /// Watched to slide out of the way. Cheap here: it only changes a transform.
+    @ObservedObject private var reflow = DragReflow.shared
+    @ObservedObject private var grid = GridMetrics.shared
     @State private var isHovering = false
     @State private var popScale: CGFloat = 1
     @State private var popOpacity: Double = 1
+    /// Position in its block, and the block it belongs to. Needed to work out whether
+    /// this tile has to make room, and in which direction.
+    let index: Int
+    let sectionGroupID: UUID?
+
+    /// True once this exact tile is the one being carried.
+    ///
+    /// Requires `reflow.sourceIndex` to be set: until then the tile still has to accept
+    /// the hit that tells the grid which app was picked up.
+    private var isCarriedAway: Bool {
+        activity.sourcePath == app.path && reflow.sourceIndex != nil
+    }
+
+    /// How far this tile slides while the dragged tile is carried past it.
+    ///
+    /// Tiles between the picked-up slot and the hovered slot move one slot towards the
+    /// pick-up, which opens a gap exactly where the card will land.
+    private var slideOffset: CGSize {
+        guard let sectionGroupID,
+              reflow.groupID == sectionGroupID,
+              let source = reflow.sourceIndex,
+              let hovered = reflow.hoveredIndex,
+              index != source else { return .zero }
+
+        let targetIndex: Int
+        if hovered > source {
+            guard index > source, index <= hovered else { return .zero }
+            targetIndex = index - 1
+        } else if hovered < source {
+            guard index >= hovered, index < source else { return .zero }
+            targetIndex = index + 1
+        } else {
+            return .zero
+        }
+
+        let columns = max(1, grid.columns)
+        let fromColumn = index % columns
+        let fromRow = index / columns
+        let toColumn = targetIndex % columns
+        let toRow = targetIndex / columns
+
+        return CGSize(
+            width: CGFloat(toColumn - fromColumn) * grid.columnStep,
+            height: CGFloat(toRow - fromRow) * grid.rowStep
+        )
+    }
 
     var body: some View {
         Button(action: onOpen) {
             cardContent
         }
         .buttonStyle(.plain)
+        // Pure transform: no relayout, which is what makes the motion continuous.
+        .offset(slideOffset)
+        .animation(
+            .interactiveSpring(response: 0.26, dampingFraction: 0.86),
+            value: reflow.hoveredIndex
+        )
         .onHover { isHovering = $0 }
         // Disk usage is only measured once the tile is actually on screen, so scrolling
         // through hundreds of apps never queues work for apps nobody looked at.
@@ -1591,10 +1759,13 @@ private struct AppCard: View {
         .scaleEffect(isHovering ? 1.015 : 1)
         // An app dropped inside the page pops up where its card now sits.
         .scaleEffect(popScale)
-        // The card the user is carrying is the solid one under the cursor; the tile it
-        // left behind marks the slot it will land in, so it fades rather than showing
-        // a second copy of the same card.
-        .opacity(popOpacity * (activity.sourcePath == app.path ? 0.32 : 1))
+        // The card is under the cursor, so the slot it came from is left empty — the
+        // gap itself is what shows where it will land.
+        .opacity(popOpacity * (isCarriedAway ? 0 : 1))
+        // It must stop taking hits too: the neighbour sliding into this slot sits under
+        // the same point, and if the invisible tile won, hovering the gap would read as
+        // "hovering the source" and snap every tile back.
+        .allowsHitTesting(!isCarriedAway)
         .onChange(of: animator.token, initial: false) { _, _ in
             guard animator.target == .grid, animator.landedPath == app.path else { return }
             popIn()
