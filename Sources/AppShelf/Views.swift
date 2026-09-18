@@ -327,31 +327,31 @@ struct ContentView: View {
                 store.addApp(app, to: groupID)
             }
         }
-        .alert("删除分组？", isPresented: Binding(
+        .alert(L10n.shared.t("删除分组？"), isPresented: Binding(
             get: { groupPendingDeletion != nil },
             set: { if !$0 { groupPendingDeletion = nil } }
         )) {
-            Button("删除", role: .destructive) {
+            Button(L10n.shared.t("删除"), role: .destructive) {
                 if let group = groupPendingDeletion {
                     store.deleteGroup(id: group.id)
                 }
                 groupPendingDeletion = nil
             }
-            Button("取消", role: .cancel) {
+            Button(L10n.shared.t("取消"), role: .cancel) {
                 groupPendingDeletion = nil
             }
         } message: {
-            Text("分组中的应用不会被卸载，只会移除这个分组。")
+            L10nText("分组中的应用不会被卸载，只会移除这个分组。")
         }
-        .alert("操作失败", isPresented: Binding(
+        .alert(L10n.shared.t("操作失败"), isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
         )) {
-            Button("好", role: .cancel) {
+            Button(L10n.shared.t("好"), role: .cancel) {
                 store.errorMessage = nil
             }
         } message: {
-            Text(store.errorMessage ?? "请稍后重试。")
+            Text(store.errorMessage ?? L10n.shared.t("请稍后重试。"))
         }
     }
 
@@ -393,7 +393,7 @@ struct ContentView: View {
                     let removed = items.filter { $0.kind == .quickTool }
                     guard !removed.isEmpty else { return false }
                     removed.forEach { quickTools.remove($0.value) }
-                    store.note("已从快捷工具移除")
+                    store.note(L10n.shared.t("已从快捷工具移除"))
                     return true
                 } isTargeted: { _ in }
             }
@@ -415,7 +415,7 @@ struct ContentView: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            TextField("搜索应用，支持拼音首字母，如 wx / vsc", text: $store.query)
+            TextField(L10n.shared.t("搜索应用，支持拼音首字母，如 wx / vsc"), text: $store.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .focused($isSearchFocused)
@@ -428,7 +428,7 @@ struct ContentView: View {
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
-                .help("清除搜索")
+                .help(L10n.shared.t("清除搜索"))
             }
         }
         .padding(.horizontal, 12)
@@ -463,7 +463,8 @@ struct ContentView: View {
                         .foregroundStyle(.primary)
                 }
 
-                Text("\(store.filteredCount) 个应用 · \(store.count(for: .running)) 个正在运行")
+                Text(L10n.shared.t("apps_count",
+                      args: ["count": "\(store.filteredCount)", "running": "\(store.count(for: .running))"]))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -471,11 +472,15 @@ struct ContentView: View {
             Spacer(minLength: 18)
 
             Toggle(isOn: $store.runningOnly) {
-                Label("运行中", systemImage: "bolt.fill")
-                    .font(.system(size: 12, weight: .medium))
+                Label {
+                    L10nText("运行中")
+                } icon: {
+                    Image(systemName: "bolt.fill")
+                }
+                .font(.system(size: 12, weight: .medium))
             }
             .toggleStyle(.checkbox)
-            .help("只显示正在运行的应用")
+            .help(L10n.shared.t("只显示正在运行的应用"))
 
             Button(action: store.reload) {
                 Image(systemName: "arrow.clockwise")
@@ -483,15 +488,70 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .help("刷新应用列表")
+            .help(L10n.shared.t("刷新应用列表"))
 
             Button(action: chooseApps) {
-                Label("添加应用", systemImage: "plus")
-                    .font(.system(size: 12, weight: .semibold))
+                Label {
+                    L10nText("添加应用")
+                } icon: {
+                    Image(systemName: "plus")
+                }
+                .font(.system(size: 12, weight: .semibold))
             }
             .buttonStyle(.borderedProminent)
             .tint(AppShelfPalette.accent)
             .controlSize(.large)
+
+            // Appearance switch: follow the OS, or force light / dark.
+            Menu {
+                ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                    Button {
+                        Appearance.shared.mode = mode
+                    } label: {
+                        HStack {
+                            Image(systemName: mode.symbol)
+                            L10nText(mode.titleKey)
+                            if Appearance.shared.mode == mode {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: Appearance.shared.mode.symbol)
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            .menuStyle(.borderlessButton)
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .help(L10n.shared.t("appearance"))
+
+            // Language switch: pick a bundled or external language.
+            Menu {
+                ForEach(L10n.shared.availableLanguages, id: \.self) { code in
+                    Button {
+                        L10n.shared.language = code
+                    } label: {
+                        HStack {
+                            if code == "system" {
+                                L10nText("language.system")
+                            } else {
+                                Text(L10n.shared.displayName(for: code))
+                            }
+                            if L10n.shared.language == code {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "globe")
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            .menuStyle(.borderlessButton)
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .help(L10n.shared.t("language"))
 
             Button(action: openSystemSettings) {
                 Image(systemName: "gearshape")
@@ -499,7 +559,7 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .help("设置")
+            .help(L10n.shared.t("设置"))
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 20)
@@ -600,7 +660,7 @@ struct ContentView: View {
         let groupID: UUID?
 
         var body: some View {
-            Text(highlight.sectionTargetID == groupID ? "放到这里" : "拖动标题或卡片可调整顺序")
+            Text(highlight.sectionTargetID == groupID ? L10n.shared.t("放到这里") : L10n.shared.t("拖动标题或卡片可调整顺序"))
                 .font(.system(size: 10))
                 .foregroundStyle(
                     highlight.sectionTargetID == groupID
@@ -723,7 +783,7 @@ struct ContentView: View {
                     // A quick tool dropped anywhere outside its row is removed.
                     if let tool = items.first(where: { $0.kind == .quickTool }) {
                         quickTools.remove(tool.value)
-                        store.note("已从快捷工具移除")
+                        store.note(L10n.shared.t("已从快捷工具移除"))
                         return true
                     }
 
@@ -783,7 +843,7 @@ struct ContentView: View {
             let ungrouped = visible(store.ungroupedApps())
             if !ungrouped.isEmpty {
                 sections.append(
-                    AppSection(id: "ungrouped", title: "未分组", symbol: "tray", tint: .secondary, groupID: nil, apps: ungrouped)
+                    AppSection(id: "ungrouped", title: L10n.shared.t("未分组"), symbol: "tray", tint: .secondary, groupID: nil, apps: ungrouped)
                 )
             }
             return sections
@@ -809,14 +869,14 @@ struct ContentView: View {
                     .fill(store.isLoading ? Color.orange : AppShelfPalette.success)
                     .frame(width: 7, height: 7)
 
-                Text(store.isLoading ? "正在扫描应用…" : "已扫描 \(store.apps.count) 个应用")
+                Text(store.isLoading ? L10n.shared.t("正在扫描应用…") : L10n.shared.t("apps_scanned", args: ["count": "\(store.apps.count)"]))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
 
                 Text("·")
                     .foregroundStyle(.tertiary)
 
-                Text("更新于 \(store.lastUpdated.formatted(date: .omitted, time: .shortened))")
+                Text(L10n.shared.t("updated_at", args: ["time": store.lastUpdated.formatted(date: .omitted, time: .shortened)]))
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
 
@@ -830,7 +890,7 @@ struct ContentView: View {
 
                 Spacer()
 
-                Text("应用架")
+                L10nText("应用架")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(.tertiary)
             }
@@ -862,8 +922,8 @@ struct ContentView: View {
         // The system picker is opened only after an explicit Add App action and never scans
         // arbitrary folders on its own.
         let panel = NSOpenPanel()
-        panel.title = "添加应用"
-        panel.message = "选择一个或多个 .app 文件"
+        panel.title = L10n.shared.t("添加应用")
+        panel.message = L10n.shared.t("选择一个或多个 .app 文件")
         panel.allowedContentTypes = [.applicationBundle]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
@@ -892,7 +952,7 @@ private struct SidebarGroups: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                SidebarSectionLabel("分组")
+                SidebarSectionLabel(L10n.shared.t("分组"))
                 Spacer()
                 Button(action: onNewGroup) {
                     Image(systemName: "plus")
@@ -900,7 +960,7 @@ private struct SidebarGroups: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("新建分组")
+                .help(L10n.shared.t("新建分组"))
             }
 
             ForEach(store.groups) { group in
@@ -915,10 +975,10 @@ private struct SidebarGroups: View {
                     store.selection = .group(group.id)
                 }
                 .contextMenu {
-                    Button("编辑分组", systemImage: "pencil") {
+                    Button(L10n.shared.t("编辑分组"), systemImage: "pencil") {
                         onEditGroup(group)
                     }
-                    Button("删除分组", systemImage: "trash", role: .destructive) {
+                    Button(L10n.shared.t("删除分组"), systemImage: "trash", role: .destructive) {
                         onDeleteGroup(group)
                     }
                 }
@@ -975,9 +1035,9 @@ struct SidebarView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 5) {
-                        SidebarSectionLabel("我的应用")
+                        SidebarSectionLabel(L10n.shared.t("我的应用"))
                         SidebarRow(
-                            title: "全部应用",
+                            title: L10n.shared.t("全部应用"),
                             symbol: "square.grid.2x2.fill",
                             tint: AppShelfPalette.accent,
                             count: store.count(for: .all),
@@ -986,7 +1046,7 @@ struct SidebarView: View {
                             store.selection = .all
                         }
                         SidebarRow(
-                            title: "正在运行",
+                            title: L10n.shared.t("正在运行"),
                             symbol: "bolt.fill",
                             tint: AppShelfPalette.success,
                             count: store.count(for: .running),
@@ -995,7 +1055,7 @@ struct SidebarView: View {
                             store.selection = .running
                         }
                         SidebarRow(
-                            title: "未分组",
+                            title: L10n.shared.t("未分组"),
                             symbol: "tray",
                             tint: .secondary,
                             count: store.count(for: .ungrouped),
@@ -1013,7 +1073,7 @@ struct SidebarView: View {
                     .environmentObject(store)
 
                     VStack(alignment: .leading, spacing: 5) {
-                        SidebarSectionLabel("快捷工具")
+                        SidebarSectionLabel(L10n.shared.t("快捷工具"))
                         ForEach(quickTools.items) { tool in
                             ToolRow(tool: tool) {
                                 onLaunchTool(tool)
@@ -1028,10 +1088,10 @@ struct SidebarView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 5) {
-                Text("自动扫描")
+                L10nText("自动扫描")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
-                Text("/Applications · 系统应用 · ~/Applications")
+                L10nText("/Applications · 系统应用 · ~/Applications")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                     .lineLimit(2)
@@ -1055,7 +1115,7 @@ struct SidebarView: View {
             .frame(width: 34, height: 34)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("应用架")
+                L10nText("应用架")
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                 Text("App Shelf")
                     .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -1187,7 +1247,7 @@ private struct ToolRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("打开\(tool.title)")
+        .help(L10n.shared.t("打开") + " \(tool.title)")
         .draggable(ShelfDragItem.quickTool(tool.id)) {
             Label(tool.title, systemImage: "square.dashed")
                 .font(.system(size: 12, weight: .semibold))
@@ -1237,20 +1297,20 @@ private struct AppCard: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .contextMenu {
-            Button("打开", systemImage: "arrow.up.right") { onOpen() }
-            Button("加入其他分组", systemImage: "folder.badge.plus") { onMove() }
+            Button(L10n.shared.t("打开"), systemImage: "arrow.up.right") { onOpen() }
+            Button(L10n.shared.t("加入其他分组"), systemImage: "folder.badge.plus") { onMove() }
 
             if !removableGroups.isEmpty {
                 Divider()
-                Menu("取消分组") {
+                Menu(L10n.shared.t("取消分组")) {
                     ForEach(removableGroups) { group in
-                        Button("移出“\(group.name)”", systemImage: "minus.circle") {
+                        Button(L10n.shared.t("removed_from_group", args: ["name": group.name]), systemImage: "minus.circle") {
                             onRemoveFromGroup(group)
                         }
                     }
                     if removableGroups.count > 1 {
                         Divider()
-                        Button("移出全部分组", systemImage: "xmark.circle", role: .destructive) {
+                        Button(L10n.shared.t("移出全部分组"), systemImage: "xmark.circle", role: .destructive) {
                             removableGroups.forEach(onRemoveFromGroup)
                         }
                     }
@@ -1259,15 +1319,15 @@ private struct AppCard: View {
 
             if let onQuit {
                 Divider()
-                Button("退出应用", systemImage: "xmark.circle") { onQuit() }
+                Button(L10n.shared.t("退出应用"), systemImage: "xmark.circle") { onQuit() }
                 if let onForceQuit {
-                    Button("强制结束", systemImage: "exclamationmark.octagon", role: .destructive) { onForceQuit() }
+                    Button(L10n.shared.t("强制结束"), systemImage: "exclamationmark.octagon", role: .destructive) { onForceQuit() }
                 }
             }
             Divider()
-            Button("在 Finder 中显示", systemImage: "folder") { onShowInFinder() }
+            Button(L10n.shared.t("在 Finder 中显示"), systemImage: "folder") { onShowInFinder() }
         }
-        .help("打开\(app.name)")
+        .help(L10n.shared.t("打开") + " \(app.name)")
     }
 
     /// Launchpad-style tile: a large icon, a centred name, and one quiet info line.
@@ -1341,7 +1401,7 @@ private struct AppCard: View {
         var body: some View {
             HStack(spacing: 4) {
                 if showsCategory {
-                    Text(app.category)
+                    Text(L10n.shared.t(app.category))
                         .foregroundStyle(.secondary)
                     Text("·")
                         .foregroundStyle(.tertiary)
@@ -1359,7 +1419,7 @@ private struct AppCard: View {
             }
             .font(.system(size: 10.5, weight: .medium, design: .rounded))
             .lineLimit(1)
-            .help("磁盘占用 = 应用本体 + 该应用在 Library 中的数据；内存为运行中全部进程之和")
+            .help(L10n.shared.t("应用占用 = 应用本体 + 该应用在 Library 中的数据；内存为运行中全部进程之和"))
         }
     }
 
@@ -1414,9 +1474,9 @@ private struct RemoveFromGroupStrip: View {
 
     @State private var isTargeted = false
     private let debounceDelay = 0.22
-    /// Reserved at all times so the strip never overlaps a card or shifts the grid
-    /// when it appears. Tall enough to drop into casually.
-    private let stripHeight: CGFloat = 56
+    /// Tall enough to drop into casually. Only shown while a drag is in progress, so
+    /// it never occupies space (or overlaps a card) when idle.
+    private let stripHeight: CGFloat = 64
 
     var body: some View {
         // Visible for the whole drag; only the fill follows the cursor. The frame is
@@ -1427,40 +1487,22 @@ private struct RemoveFromGroupStrip: View {
             if isVisible {
                 HStack(spacing: 8) {
                     Image(systemName: "trash")
+                        .font(.system(size: 14, weight: .semibold))
+                    L10nText("拖到这里，从该分组移除")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("拖到这里，从该分组移除")
-                        .font(.system(size: 12.5, weight: .semibold))
                 }
                 .foregroundStyle(isTargeted ? Color.white : Color.red)
                 .frame(maxWidth: .infinity)
                 .frame(height: stripHeight)
                 .background(
-                    isTargeted ? Color.red.opacity(0.9) : Color.red.opacity(0.1),
-                    in: RoundedRectangle(cornerRadius: 11)
+                    isTargeted ? Color.red.opacity(0.9) : Color.red.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 12)
                 )
                 .overlay {
-                    RoundedRectangle(cornerRadius: 11)
+                    RoundedRectangle(cornerRadius: 12)
                         .strokeBorder(
                             Color.red.opacity(isTargeted ? 1 : 0.5),
                             style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
-                        )
-                }
-            } else {
-                HStack(spacing: 6) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12, weight: .medium))
-                    Text("拖到这里移出本组")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundStyle(Color.secondary)
-                .opacity(0.32)
-                .frame(maxWidth: .infinity)
-                .frame(height: stripHeight)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 11)
-                        .strokeBorder(
-                            Color.secondary.opacity(0.3),
-                            style: StrokeStyle(lineWidth: 1.2, dash: [5, 4])
                         )
                 }
             }
@@ -1514,11 +1556,11 @@ private struct QuickToolsRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("快捷工具")
+                L10nText("快捷工具")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(isTargeted ? "松手即可添加" : "拖应用进来添加，拖出去移除")
+                Text(isTargeted ? L10n.shared.t("松手即可添加") : L10n.shared.t("拖应用进来添加，拖出去移除"))
                     .font(.system(size: 11))
                     .foregroundStyle(isTargeted ? AppShelfPalette.accent : Color.secondary.opacity(0.7))
             }
@@ -1553,7 +1595,7 @@ private struct QuickToolsRow: View {
                     ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
                 quickTools.addCustom(name: name, path: path)
             }
-            onAdded("已加入快捷工具")
+            onAdded(L10n.shared.t("已加入快捷工具"))
             return true
         } isTargeted: { isTargeted in
             self.isTargeted = isTargeted
@@ -1577,7 +1619,7 @@ private struct QuickToolTile: View {
                     Text(tool.title)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.primary)
-                    Text("打开")
+                    L10nText("打开")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                 }
@@ -1596,7 +1638,7 @@ private struct QuickToolTile: View {
             }
         }
         .buttonStyle(.plain)
-        .help("打开\(tool.title)")
+        .help(L10n.shared.t("打开") + " \(tool.title)")
         // Drag the tile out of the row to remove it.
         .draggable(ShelfDragItem.quickTool(tool.id)) {
             Label(tool.title, systemImage: "square.dashed")
@@ -1627,7 +1669,7 @@ private struct LoadingState: View {
         VStack(spacing: 12) {
             ProgressView()
                 .controlSize(.small)
-            Text("正在读取应用…")
+            L10nText("正在读取应用…")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
         }
@@ -1650,23 +1692,23 @@ private struct EmptyState: View {
                 .frame(width: 66, height: 66)
                 .background(AppShelfPalette.panel, in: RoundedRectangle(cornerRadius: 16))
 
-            Text(query.isEmpty ? "这个分组还没有应用" : "没有匹配的应用")
+            Text(query.isEmpty ? L10n.shared.t("这个分组还没有应用") : L10n.shared.t("没有匹配的应用"))
                 .font(.system(size: 16, weight: .semibold))
 
-            Text(query.isEmpty ? "可以添加一个 .app，或切换到其他分组。" : "换个关键词试试。")
+            Text(query.isEmpty ? L10n.shared.t("可以添加一个 .app，或切换到其他分组。") : L10n.shared.t("换个关键词试试。"))
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
                 if !query.isEmpty {
-                    Button("清除搜索", action: onClearSearch)
+                    Button(L10n.shared.t("清除搜索"), action: onClearSearch)
                         .buttonStyle(.bordered)
                 }
                 if selection != .running {
                     Button {
                         onAddApp()
                     } label: {
-                        Label("添加应用", systemImage: "plus")
+                        Label(L10n.shared.t("添加应用"), systemImage: "plus")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(AppShelfPalette.accent)
@@ -1707,9 +1749,9 @@ struct GroupEditorSheet: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(existing == nil ? "新建分组" : "编辑分组")
+                    Text(existing == nil ? L10n.shared.t("新建分组") : L10n.shared.t("编辑分组"))
                         .font(.system(size: 20, weight: .semibold, design: .rounded))
-                    Text("给分组一个容易辨认的名称和图标")
+                    L10nText("给分组一个容易辨认的名称和图标")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -1717,14 +1759,14 @@ struct GroupEditorSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("名称")
+                L10nText("名称")
                     .font(.system(size: 12, weight: .semibold))
-                TextField("例如：项目、影音、常用", text: $name)
+                TextField(L10n.shared.t("例如：项目、影音、常用"), text: $name)
                     .textFieldStyle(.roundedBorder)
             }
 
             VStack(alignment: .leading, spacing: 9) {
-                Text("图标")
+                L10nText("图标")
                     .font(.system(size: 12, weight: .semibold))
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 8), spacing: 8) {
                     ForEach(symbols, id: \.self) { symbol in
@@ -1749,13 +1791,13 @@ struct GroupEditorSheet: View {
                 }
             }
 
-            ColorPicker("颜色", selection: $color, supportsOpacity: false)
+            ColorPicker(L10n.shared.t("颜色"), selection: $color, supportsOpacity: false)
                 .font(.system(size: 12, weight: .semibold))
 
             HStack {
                 Spacer()
-                Button("取消", role: .cancel) { dismiss() }
-                Button(existing == nil ? "创建" : "保存") {
+                Button(L10n.shared.t("取消"), role: .cancel) { dismiss() }
+                Button(existing == nil ? L10n.shared.t("创建") : L10n.shared.t("保存")) {
                     onSave(name, selectedSymbol, color.appShelfHex)
                     dismiss()
                 }
@@ -1791,9 +1833,9 @@ struct AddAppsSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("添加到应用架")
+                L10nText("添加到应用架")
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
-                Text("已选择 \(urls.count) 个应用")
+                Text(L10n.shared.t("已选择 个应用", args: ["count": "\(urls.count)"]))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -1818,7 +1860,7 @@ struct AddAppsSheet: View {
             }
             .frame(maxHeight: 190)
 
-            Picker("目标分组", selection: $selectedGroupID) {
+            Picker(L10n.shared.t("目标分组"), selection: $selectedGroupID) {
                 ForEach(groups) { group in
                     Label(group.name, systemImage: group.symbol)
                         .tag(group.id)
@@ -1828,12 +1870,12 @@ struct AddAppsSheet: View {
 
             HStack {
                 Spacer()
-                Button("取消", role: .cancel) { dismiss() }
+                Button(L10n.shared.t("取消"), role: .cancel) { dismiss() }
                 Button {
                     onAdd(urls, selectedGroupID)
                     dismiss()
                 } label: {
-                    Label("加入分组", systemImage: "plus")
+                    Label(L10n.shared.t("加入分组"), systemImage: "plus")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(AppShelfPalette.accent)
@@ -1869,7 +1911,7 @@ struct MoveAppSheet: View {
                     .resizable()
                     .frame(width: 44, height: 44)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("加入其他分组")
+                    L10nText("加入其他分组")
                         .font(.system(size: 18, weight: .semibold, design: .rounded))
                     Text(app.name)
                         .font(.system(size: 12))
@@ -1878,7 +1920,7 @@ struct MoveAppSheet: View {
                 }
             }
 
-            Picker("目标分组", selection: $selectedGroupID) {
+            Picker(L10n.shared.t("目标分组"), selection: $selectedGroupID) {
                 ForEach(groups) { group in
                     Label(group.name, systemImage: group.symbol)
                         .tag(Optional(group.id))
@@ -1888,8 +1930,8 @@ struct MoveAppSheet: View {
 
             HStack {
                 Spacer()
-                Button("取消", role: .cancel) { dismiss() }
-                Button("加入") {
+                Button(L10n.shared.t("取消"), role: .cancel) { dismiss() }
+                Button(L10n.shared.t("加入")) {
                     if let selectedGroupID { onMove(selectedGroupID) }
                     dismiss()
                 }

@@ -20,20 +20,26 @@ struct AppShelfApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("聚焦搜索") {
+                Button {
                     appDelegate.toggleSearchPanel()
+                } label: {
+                    L10nText("聚焦搜索")
                 }
                 .keyboardShortcut("k", modifiers: [.command])
 
-                Button("刷新应用列表") {
+                Button {
                     store.reload()
+                } label: {
+                    L10nText("刷新应用列表")
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option])
             }
 
             CommandGroup(after: .appSettings) {
-                Button("设置…") {
+                Button {
                     SettingsWindowController.shared.showWindow()
+                } label: {
+                    L10nText("设置…")
                 }
                 .keyboardShortcut(",", modifiers: [.command])
             }

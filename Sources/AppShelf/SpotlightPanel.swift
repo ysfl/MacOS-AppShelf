@@ -25,7 +25,7 @@ final class SpotlightController: ObservableObject {
 
     var shortcutHint: String {
         let shortcut = HotKeyStore.shared.shortcut
-        return shortcut.isEnabled ? shortcut.display : "未设置"
+        return shortcut.isEnabled ? shortcut.display : L10n.shared.t("未设置")
     }
 
     /// Resets the panel each time it is presented so it always opens on a clean query.
@@ -310,7 +310,7 @@ struct SpotlightView: View {
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            TextField("搜索应用…", text: $controller.query)
+            TextField(L10n.shared.t("搜索应用…"), text: $controller.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 18, weight: .regular))
                 .focused($isFieldFocused)
@@ -350,9 +350,9 @@ struct SpotlightView: View {
 
     private var noResults: some View {
         VStack(spacing: 6) {
-            Text("没有匹配的应用")
+            L10nText("没有匹配的应用")
                 .font(.system(size: 13, weight: .semibold))
-            Text("试试应用名、拼音全拼或首字母，例如“wx”")
+            L10nText("试试应用名、拼音全拼或首字母，例如“wx”")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }
@@ -361,11 +361,11 @@ struct SpotlightView: View {
 
     private var hintBar: some View {
         HStack(spacing: 14) {
-            hint("↑↓", "选择")
-            hint("⏎", "打开")
-            hint("esc", "关闭")
+            hint("↑↓", L10n.shared.t("选择"))
+            hint("⏎", L10n.shared.t("打开"))
+            hint("esc", L10n.shared.t("关闭"))
             Spacer()
-            Text("应用架")
+            L10nText("应用架")
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundStyle(.tertiary)
         }
@@ -415,11 +415,11 @@ private struct SpotlightRow: View {
                             Circle()
                                 .fill(AppShelfPalette.success)
                                 .frame(width: 5, height: 5)
-                            Text("运行中")
+                            L10nText("运行中")
                                 .font(.system(size: 10.5, weight: .medium))
                                 .foregroundStyle(AppShelfPalette.success)
                         }
-                        Text(app.category)
+                        Text(L10n.shared.t(app.category))
                             .font(.system(size: 10.5))
                             .foregroundStyle(.secondary)
                     }

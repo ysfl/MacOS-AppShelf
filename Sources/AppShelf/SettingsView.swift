@@ -44,13 +44,13 @@ struct ShortcutRecorderView: View {
                 Button {
                     toggleRecording()
                 } label: {
-                    Text(isRecording ? "按下组合键…" : shortcut.display)
+                    Text(isRecording ? L10n.shared.t("按下组合键…") : shortcut.display)
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .frame(minWidth: 108)
                 }
                 .controlSize(.large)
 
-                Button("恢复默认") {
+                Button(L10n.shared.t("恢复默认")) {
                     coordinator.stop()
                     isRecording = false
                     shortcut = HotKey.fallback
@@ -59,11 +59,11 @@ struct ShortcutRecorderView: View {
                 .disabled(shortcut == HotKey.fallback)
 
                 if shortcut.isEnabled {
-                    Button("清除") {
+                    Button(L10n.shared.t("清除")) {
                         coordinator.stop()
                         isRecording = false
                         shortcut = HotKey.disabled
-                        message = "已停用全局快捷键"
+                        message = L10n.shared.t("已停用全局快捷键")
                     }
                 }
             }
@@ -73,7 +73,7 @@ struct ShortcutRecorderView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } else if isRecording {
-                Text("请按住 ⌘ / ⌥ / ⌃ / ⇧ 中的至少一个，esc 取消")
+                Text(L10n.shared.t("请按住 ⌘ / ⌥ / ⌃ / ⇧ 中的至少一个，esc 取消"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -96,7 +96,7 @@ struct ShortcutRecorderView: View {
                 shortcut = result
                 message = nil
             } else {
-                message = "已取消"
+                message = L10n.shared.t("已取消")
             }
         }
     }
@@ -118,9 +118,9 @@ final class SettingsWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "设置"
+        window.title = L10n.shared.t("设置")
         window.contentView = hosting
-        window.setContentSize(NSSize(width: 430, height: 640))
+        window.setContentSize(NSSize(width: 430, height: 760))
         window.isReleasedWhenClosed = false
         window.center()
         super.init(window: window)
@@ -150,43 +150,43 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("设置")
+                L10nText("设置")
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
-                Text("快捷键、菜单栏图标和应用占用统计")
+                L10nText("快捷键、菜单栏图标和应用占用统计")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
 
             GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("聚焦搜索快捷键")
+                    L10nText("聚焦搜索快捷键")
                         .font(.system(size: 12, weight: .semibold))
                     ShortcutRecorderView(shortcut: $hotKeys.shortcut)
-                    Text("按下这个组合键会在任何应用中唤出搜索框，输入后回车即可打开应用。")
+                    L10nText("按下这个组合键会在任何应用中唤出搜索框，输入后回车即可打开应用。")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                     if hotKeys.registrationFailed {
-                        Text("系统没有接受这个组合键，可能被其他应用占用了，换一个试试。")
+                        L10nText("系统没有接受这个组合键，可能被其他应用占用了，换一个试试。")
                             .font(.system(size: 11))
                             .foregroundStyle(Color.red)
                     }
                 }
                 .padding(6)
             } label: {
-                Text("快捷键")
+                L10nText("快捷键")
             }
 
             GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
-                    Toggle("显示菜单栏图标", isOn: $hotKeys.showsStatusItem)
+                    Toggle(L10n.shared.t("显示菜单栏图标"), isOn: $hotKeys.showsStatusItem)
                         .font(.system(size: 12, weight: .semibold))
-                    Text("菜单栏图标可以打开搜索框、应用架窗口和本设置面板。")
+                    L10nText("菜单栏图标可以打开搜索框、应用架窗口和本设置面板。")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
                 .padding(6)
             } label: {
-                Text("菜单栏")
+                L10nText("菜单栏")
             }
 
             GroupBox {
@@ -226,13 +226,13 @@ struct SettingsView: View {
                             } label: {
                                 Image(systemName: "minus.circle")
                             }
-                            .buttonStyle(.borderless)
-                            .help("隐藏")
+                                    .buttonStyle(.borderless)
+                                    .help(L10n.shared.t("隐藏"))
                         }
                     }
 
                     if quickTools.items.isEmpty {
-                        Text("还没有显示任何快捷工具")
+                        L10nText("还没有显示任何快捷工具")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
@@ -240,7 +240,7 @@ struct SettingsView: View {
                     Divider()
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("添加或隐藏")
+                        L10nText("添加或隐藏")
                             .font(.system(size: 12, weight: .semibold))
 
                         ForEach(hiddenTools) { item in
@@ -249,7 +249,7 @@ struct SettingsView: View {
                                     .font(.system(size: 12))
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
-                                Button("显示") {
+                                Button(L10n.shared.t("显示")) {
                                     quickTools.setEnabled(item.id, isEnabled: true)
                                 }
                                 .buttonStyle(.borderless)
@@ -262,48 +262,86 @@ struct SettingsView: View {
                                         Image(systemName: "trash")
                                     }
                                     .buttonStyle(.borderless)
-                                    .help("删除")
+                                    .help(L10n.shared.t("删除"))
                                 }
                             }
                         }
 
-                        Button("添加应用为快捷工具…", action: addQuickToolApp)
+                        Button(L10n.shared.t("添加应用为快捷工具…"), action: addQuickToolApp)
                     }
 
-                    Text("快捷工具显示在侧边栏和“全部应用”顶部；可以把常用应用加进来。")
+                    L10nText("快捷工具显示在侧边栏和“全部应用”顶部；可以把常用应用加进来。")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
                 .padding(6)
             } label: {
-                Text("快捷工具")
+                L10nText("快捷工具")
             }
 
             GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
-                    Button("重新计算磁盘占用") {
+                    Button(L10n.shared.t("重新计算磁盘占用")) {
                         AppMetrics.shared.recalculate()
                     }
-                    Text("占用量在后台测量并缓存。更新或卸载应用后可以重新计算一次。")
+                    L10nText("占用量在后台测量并缓存。更新或卸载应用后可以重新计算一次。")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
                 .padding(6)
             } label: {
-                Text("应用占用")
+                L10nText("应用占用")
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
+                    Picker(selection: Binding(get: { Appearance.shared.mode }, set: { Appearance.shared.mode = $0 })) {
+                        ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                            L10nText(mode.titleKey)
+                        }
+                    } label: {
+                        L10nText("appearance")
+                    }
+                    .pickerStyle(.segmented)
+
+                    Picker(selection: Binding(get: { L10n.shared.language }, set: { L10n.shared.language = $0 })) {
+                        ForEach(L10n.shared.availableLanguages, id: \.self) { code in
+                            if code == "system" {
+                                L10nText("language.system")
+                            } else {
+                                Text(L10n.shared.displayName(for: code))
+                            }
+                        }
+                    } label: {
+                        L10nText("language")
+                    }
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L10n.shared.defaultLoadPath.path)
+                            .font(.system(size: 10, design: .monospaced))
+                            .textSelection(.enabled)
+                            .foregroundStyle(.secondary)
+                        L10nText("external_localization_hint")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(6)
+            } label: {
+                L10nText("language")
             }
 
             Spacer(minLength: 0)
         }
         .padding(22)
-        .frame(width: 430, height: 640)
+        .frame(width: 430, height: 760)
     }
 
     /// Picks a bundle to pin as a quick tool, the same way apps are added to a group.
     private func addQuickToolApp() {
         let panel = NSOpenPanel()
-        panel.title = "添加快捷工具"
-        panel.message = "选择一个 .app"
+        panel.title = L10n.shared.t("添加快捷工具")
+        panel.message = L10n.shared.t("选择一个 .app")
         panel.allowedContentTypes = [.applicationBundle]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false

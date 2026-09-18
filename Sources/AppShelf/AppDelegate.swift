@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Appearance.shared.apply()
         let panel = SpotlightPanel(controller: searchController)
         searchController.onRequestClose = { [weak self] in
             self?.searchPanel?.dismiss()
@@ -46,13 +47,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Right-clicking the Dock icon lists the groups so an app shelf can be opened directly.
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
+        let l = L10n.shared
 
-        let search = NSMenuItem(title: "聚焦搜索", action: #selector(showSearchPanel(_:)), keyEquivalent: "")
+        let search = NSMenuItem(title: l.t("聚焦搜索"), action: #selector(showSearchPanel(_:)), keyEquivalent: "")
         search.target = self
         search.image = symbol("magnifyingglass")
         menu.addItem(search)
 
-        let open = NSMenuItem(title: "打开应用架", action: #selector(openMainWindow(_:)), keyEquivalent: "")
+        let open = NSMenuItem(title: l.t("打开应用架"), action: #selector(openMainWindow(_:)), keyEquivalent: "")
         open.target = self
         open.image = symbol("square.grid.3x3.fill")
         menu.addItem(open)
@@ -74,12 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let refresh = NSMenuItem(title: "刷新应用列表", action: #selector(refreshApps(_:)), keyEquivalent: "")
+        let refresh = NSMenuItem(title: l.t("刷新应用列表"), action: #selector(refreshApps(_:)), keyEquivalent: "")
         refresh.target = self
         refresh.image = symbol("arrow.clockwise")
         menu.addItem(refresh)
 
-        let settings = NSMenuItem(title: "设置…", action: #selector(openSettings(_:)), keyEquivalent: ",")
+        let settings = NSMenuItem(title: l.t("设置…"), action: #selector(openSettings(_:)), keyEquivalent: ",")
         settings.target = self
         settings.image = symbol("gearshape")
         menu.addItem(settings)
@@ -101,33 +103,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard statusItem == nil else { return }
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let l = L10n.shared
         if let button = item.button {
             button.image = symbol("square.grid.3x3.fill")
             button.image?.isTemplate = true
-            button.toolTip = "应用架"
+            button.toolTip = l.t("应用架")
         }
 
         let menu = NSMenu()
         let shortcut = HotKeyStore.shared.shortcut
         let search = NSMenuItem(
-            title: shortcut.isEnabled ? "聚焦搜索 (\(shortcut.display))" : "聚焦搜索",
+            title: shortcut.isEnabled ? "\(l.t("聚焦搜索")) (\(shortcut.display))" : l.t("聚焦搜索"),
             action: #selector(showSearchPanel(_:)),
             keyEquivalent: ""
         )
         search.target = self
         menu.addItem(search)
 
-        let open = NSMenuItem(title: "打开应用架", action: #selector(openMainWindow(_:)), keyEquivalent: "")
+        let open = NSMenuItem(title: l.t("打开应用架"), action: #selector(openMainWindow(_:)), keyEquivalent: "")
         open.target = self
         menu.addItem(open)
 
-        let settings = NSMenuItem(title: "设置…", action: #selector(openSettings(_:)), keyEquivalent: ",")
+        let settings = NSMenuItem(title: l.t("设置…"), action: #selector(openSettings(_:)), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
 
         menu.addItem(.separator())
 
-        let quit = NSMenuItem(title: "退出应用架", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quit = NSMenuItem(title: l.t("退出应用架"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
 
         item.menu = menu

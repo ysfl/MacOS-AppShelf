@@ -20,6 +20,10 @@ mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$BIN_PATH" "$APP_PATH/Contents/MacOS/AppShelf"
 cp "$PROJECT_DIR/Info.plist" "$APP_PATH/Contents/Info.plist"
 
+# Bundle the per-language JSON files so the UI can be localized at runtime.
+mkdir -p "$APP_PATH/Contents/Resources/Localization"
+cp "$PROJECT_DIR/Resources/Localization"/*.json "$APP_PATH/Contents/Resources/Localization/" 2>/dev/null || true
+
 ICON_MASTER="$ICON_WORK/icon_1024x1024.png"
 ICON_SET="$ICON_WORK/AppIcon.iconset"
 mkdir -p "$ICON_SET"

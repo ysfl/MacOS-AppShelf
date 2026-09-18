@@ -13,7 +13,7 @@ struct HotKey: Codable, Equatable, Sendable {
     static let fallback = HotKey(keyCode: UInt32(kVK_Space), carbonModifiers: UInt32(optionKey), display: "⌥Space")
 
     /// The recorder writes this when the user clears the shortcut.
-    static let disabled = HotKey(keyCode: UInt32.max, carbonModifiers: 0, display: "未设置")
+    static let disabled = HotKey(keyCode: UInt32.max, carbonModifiers: 0, display: L10n.shared.t("未设置"))
 
     var isEnabled: Bool { keyCode != UInt32.max }
 }
@@ -52,7 +52,7 @@ extension HotKey {
     static func keyName(keyCode: UInt16, characters: String) -> String {
         if let named = specialKeyNames[Int(keyCode)] { return named }
         let upper = characters.uppercased()
-        return upper.isEmpty ? "键\(keyCode)" : upper
+        return upper.isEmpty ? L10n.shared.t("key_code", args: ["n": "\(keyCode)"]) : upper
     }
 
     private static let specialKeyNames: [Int: String] = [

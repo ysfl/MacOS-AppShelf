@@ -90,11 +90,11 @@ enum QuickTool: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .calculator: return "计算器"
-        case .terminal: return "终端"
-        case .activityMonitor: return "活动监视器"
-        case .screenshot: return "截图"
-        case .systemSettings: return "系统设置"
+        case .calculator: return L10n.shared.t("计算器")
+        case .terminal: return L10n.shared.t("终端")
+        case .activityMonitor: return L10n.shared.t("活动监视器")
+        case .screenshot: return L10n.shared.t("截图")
+        case .systemSettings: return L10n.shared.t("系统设置")
         }
     }
 
@@ -380,10 +380,10 @@ final class LauncherStore: ObservableObject {
 
     var selectedTitle: String {
         switch selection {
-        case .all: return "全部应用"
-        case .running: return "正在运行"
-        case .ungrouped: return "未分组"
-        case .group(let id): return groups.first { $0.id == id }?.name ?? "分组"
+        case .all: return L10n.shared.t("全部应用")
+        case .running: return L10n.shared.t("正在运行")
+        case .ungrouped: return L10n.shared.t("未分组")
+        case .group(let id): return groups.first { $0.id == id }?.name ?? L10n.shared.t("分组")
         }
     }
 
@@ -542,7 +542,7 @@ final class LauncherStore: ObservableObject {
     func launch(_ app: AppItem) -> Bool {
         let success = NSWorkspace.shared.open(URL(fileURLWithPath: app.path))
         if !success {
-            errorMessage = "无法打开“\(app.name)”"
+            errorMessage = L10n.shared.t("cannot_open", args: ["name": app.name])
         } else {
             refreshRunningState()
         }
@@ -556,17 +556,17 @@ final class LauncherStore: ObservableObject {
         // where Launch Services cannot resolve the identifier yet.
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: tool.bundleIdentifier) {
             let success = NSWorkspace.shared.open(url)
-            if !success { errorMessage = "无法打开“\(tool.title)”" }
+            if !success { errorMessage = L10n.shared.t("cannot_open", args: ["name": tool.title]) }
             return success
         }
 
         for path in tool.fallbackPaths where FileManager.default.fileExists(atPath: path) {
             let success = NSWorkspace.shared.open(URL(fileURLWithPath: path))
-            if !success { errorMessage = "无法打开“\(tool.title)”" }
+            if !success { errorMessage = L10n.shared.t("cannot_open", args: ["name": tool.title]) }
             return success
         }
 
-        errorMessage = "找不到“\(tool.title)”"
+        errorMessage = L10n.shared.t("not_found", args: ["name": tool.title])
         return false
     }
 
@@ -577,16 +577,16 @@ final class LauncherStore: ObservableObject {
         guard let running = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleURL?.standardizedFileURL.path == app.path
         }) else {
-            errorMessage = "“\(app.name)”现在没有在运行"
+            errorMessage = L10n.shared.t("not_running", args: ["name": app.name])
             return false
         }
 
         let stopped = force ? running.forceTerminate() : running.terminate()
         if stopped {
             refreshRunningState()
-            note(force ? "已强制结束“\(app.name)”" : "已退出“\(app.name)”")
+            note(force ? L10n.shared.t("force_quit_app", args: ["name": app.name]) : L10n.shared.t("quit_app", args: ["name": app.name]))
         } else {
-            errorMessage = "无法结束“\(app.name)”"
+            errorMessage = L10n.shared.t("cannot_quit", args: ["name": app.name])
         }
         return stopped
     }
@@ -601,7 +601,7 @@ final class LauncherStore: ObservableObject {
         guard let path = tool.path else { return false }
         let success = NSWorkspace.shared.open(URL(fileURLWithPath: path))
         if !success {
-            errorMessage = "无法打开“\(tool.title)”"
+            errorMessage = L10n.shared.t("cannot_open", args: ["name": tool.title])
         } else {
             refreshRunningState()
         }
@@ -681,7 +681,7 @@ final class LauncherStore: ObservableObject {
         groups[groupIndex].appPaths.removeAll { normalizePath($0) == path }
         guard groups[groupIndex].appPaths.count != before else { return }
         persistState()
-        note("已移出“\(groups[groupIndex].name)”")
+        note(L10n.shared.t("removed_from_group", args: ["name": groups[groupIndex].name]))
     }
 
     /// Every group this app currently belongs to, used by the card's context menu.
@@ -719,7 +719,7 @@ final class LauncherStore: ObservableObject {
         apps.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         metrics.measure(apps)
         persistState()
-        note("已把 \(addedCount) 个应用加入“\(groups[groupIndex].name)”")
+        note(L10n.shared.t("added_to_group", args: ["count": "\(addedCount)", "name": groups[groupIndex].name]))
     }
 
     /// Reorders groups, used when a sidebar row or an All Apps section header is dragged.
