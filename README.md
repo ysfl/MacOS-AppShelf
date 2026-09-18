@@ -4,7 +4,12 @@
 
 AppShelf is a native macOS app launcher. It reads `.app` bundles from common application folders, organizes them into groups, and opens them from a searchable grid. It features a Launchpad-style tile layout, drag-to-group, disk and memory usage, pinyin search, a global search panel, and a Chinese / English interface.
 
-当前版本 / Current version: `1.3.0`
+当前版本 / Current version: `1.3.1`
+
+## 1.3.1 的新变化 / What's new in 1.3.1
+
+- 修复标题栏的外观与语言菜单被横向拉散。
+  Fixes the appearance and language menus stretching apart across the toolbar in 1.3.0.
 
 ## 1.3.0 的新变化 / What's new in 1.3.0
 
@@ -65,7 +70,21 @@ If you switch between Finder, Launchpad, and Spotlight to find apps, AppShelf gi
 - The focus-search shortcut can be recorded in Settings, disabled, or restored to its default (⌥Space).
 - 提供计算器、终端、活动监视器、截图和系统设置快捷入口，也可以手动加入任意 `.app`。
 - Includes shortcuts for Calculator, Terminal, Activity Monitor, Screenshot, and System Settings. Any `.app` can also be added manually.
+- 主窗口支持键盘导航：↑↓ 选卡片、回车打开、`esc` 退出、⌘F 聚焦搜索、⌘1 至 ⌘9 切换分组、⌘Z 撤销。
+- 可以把应用从应用架隐藏，隐藏后不出现在列表和搜索结果里；侧栏“已隐藏”页负责找回。
+- 支持从访达把 `.app` 直接拖进分组、分区或快捷工具区。
+- 分组、隐藏名单、快捷工具与偏好可导出为 JSON 备份，也可导入还原到新机器。
+- 分组改动与快捷工具移除可撤销，底栏出现“撤销”按钮。
+- 卡片右键菜单支持显示包内容与拷贝 Bundle ID。
+- 分组图标为可搜索的完整目录，不再只有固定的 15 个。
 - 界面支持中文与英文，标题栏可随时切换；外观可跟随系统或固定为浅色 / 深色。
+- The main window is keyboard-driven: ↑↓ to pick a tile, Return to open, `esc` to back out, ⌘F to search, ⌘1–⌘9 for groups, ⌘Z to undo.
+- Hide apps so they leave the list and the search results, with a Hidden view to bring them back.
+- Drop `.app` bundles from Finder straight onto a group, a section, or the quick tool row.
+- Groups, hidden apps, quick tools and preferences export to JSON and import on another Mac.
+- Grouping and quick-tool changes can be undone from the footer.
+- The card menu can show package contents and copy the Bundle ID.
+- The group icon picker searches a full catalogue instead of a fixed list of fifteen.
 - The interface speaks Chinese and English and switches from the toolbar; the appearance can follow the system or be pinned to light / dark.
 - 拖动应用时整张卡片跟随光标，路径上的图标按启动台方式让位，分组整块常亮显示落点区域。
 - While dragging, the whole card follows the cursor, icons on the path slide aside like Launchpad, and the hovered block stays lit to show the destination.
@@ -75,6 +94,22 @@ If you switch between Finder, Launchpad, and Spotlight to find apps, AppShelf gi
 - Disk usage is measured only once a tile appears on screen and the process scan runs in the background, keeping scrolling smooth.
 - 搜索时按 `esc` 可退出搜索；刷新会重新扫描磁盘，执行前有确认提示。
 - Press `esc` while searching to exit search; refreshing rescans the disk and asks for confirmation first.
+
+## 快捷键 / Keyboard shortcuts
+
+| 按键 | 作用 | | Key | Action |
+|---|---|---|---|---|
+| `esc` | 退出搜索 / 放弃拖拽 | | `esc` | Leave search, abandon a drag |
+| ↑ ↓ | 在主窗口结果间移动 | | ↑ ↓ | Move between results |
+| `⏎` | 打开高亮的应用 | | `⏎` | Open the highlighted app |
+| ⌘F | 聚焦搜索框 | | ⌘F | Focus the search field |
+| ⌘K | 唤出聚焦搜索浮层 | | ⌘K | Open the floating search panel |
+| ⌥Space | 全局唤出浮层（可改、可停用） | | ⌥Space | Summon the panel from any app |
+| ⌘1 … ⌘9 | 切换到第 1 至 9 个分组 | | ⌘1 … ⌘9 | Jump to a group |
+| ⌘0 | 打开应用架窗口 | | ⌘0 | Open the shelf window |
+| ⌘Z | 撤销上一步分组或排序改动 | | ⌘Z | Undo the last change |
+| ⌥⌘R | 重新扫描应用 | | ⌥⌘R | Rescan applications |
+| ⌘, | 打开设置 | | ⌘, | Open settings |
 
 ## 多语言 / Localization
 
@@ -96,16 +131,25 @@ The same path is shown in the Settings panel. External files override the bundle
 
 ## 安装 / Install
 
-1. 下载 [AppShelf-1.3.0.dmg](release/AppShelf-1.3.0.dmg)，然后打开 DMG。
-   Download [AppShelf-1.3.0.dmg](release/AppShelf-1.3.0.dmg) and open the DMG.
+1. 下载 [AppShelf-1.3.1.dmg](https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.3.1/AppShelf-1.3.1.dmg)，然后打开 DMG。
+   Download [AppShelf-1.3.1.dmg](https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.3.1/AppShelf-1.3.1.dmg) and open the DMG.
 2. 把“应用架”拖到“应用程序”文件夹。
    Drag “应用架” to the Applications folder.
 3. 首次打开使用 Finder 右键菜单中的“打开”。发布包使用 ad-hoc 签名，未经过 Apple notarization；应用架不会请求额外系统权限。
    On first launch, use Finder's “Open” command if macOS shows a security prompt. The release is ad-hoc signed and is not notarized by Apple; AppShelf does not request extra system privileges.
 
-发布包的 SHA-256 位于 [`release/SHA256SUMS`](release/SHA256SUMS)。
+发布包的校验和作为同名 Release 附件提供：[SHA256SUMS](https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.3.1/SHA256SUMS)。下载后执行下面两条即可验证：
 
-The release checksum is in [`release/SHA256SUMS`](release/SHA256SUMS).
+The checksum ships as a release asset. Verify a download with:
+
+```bash
+curl -LO https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.3.1/SHA256SUMS
+shasum -a 256 -c SHA256SUMS
+```
+
+安装包不入库，由 `v*` 标签触发的工作流产出并挂到 Release。
+
+Installers are not committed; the tag workflow builds them and attaches them to the release.
 
 ## 开发环境要求 / Development Requirements
 
@@ -115,8 +159,8 @@ The release checksum is in [`release/SHA256SUMS`](release/SHA256SUMS).
 - A Swift 6.0 toolchain. Xcode 16 or newer is suitable, as are Xcode Command Line Tools that provide a matching Swift toolchain.
 - 构建脚本会使用 macOS 自带的 `swift`、`sips`、`iconutil`、`codesign` 和 `hdiutil`。
 - The build scripts use the macOS-provided `swift`, `sips`, `iconutil`, `codesign`, and `hdiutil` tools.
-- `1.3.0` 安装包在 Apple Silicon macOS 上构建和验证，当前不是 universal binary。Intel Mac 可以尝试从源码构建，但不在此发布包的验证范围内。
-- The `1.3.0` package was built and verified on Apple Silicon macOS and is not a universal binary. Intel Macs may build from source, but are outside the verification scope of this package.
+- `1.3.1` 安装包在 Apple Silicon macOS 上构建和验证，当前不是 universal binary。Intel Mac 可以尝试从源码构建，但不在此发布包的验证范围内。
+- The `1.3.1` package was built and verified on Apple Silicon macOS and is not a universal binary. Intel Macs may build from source, but are outside the verification scope of this package.
 
 本次发布的构建验证环境：macOS 26.5.2 (arm64)、Xcode 26.2、Swift 6.2.3。它们是验证记录，不是应用的最低运行要求。
 
@@ -142,19 +186,45 @@ swift test
 open dist/AppShelf.app
 ```
 
-生成 `1.3.0` 安装包（版本号会写入包内 `Info.plist`，与 `CHANGELOG.md` 不一致时直接拒绝打包）：
+生成 `1.3.1` 安装包（版本号会写入包内 `Info.plist`，与 `CHANGELOG.md` 不一致时直接拒绝打包）：
 
-Build the `1.3.0` installer. The version is written into the bundle's `Info.plist`, and the script refuses when it disagrees with `CHANGELOG.md`:
+Build the `1.3.1` installer. The version is written into the bundle's `Info.plist`, and the script refuses when it disagrees with `CHANGELOG.md`:
 
 ```bash
-./Scripts/build-release.sh 1.3.0
+./Scripts/build-release.sh 1.3.1
 (cd release && shasum -a 256 -c SHA256SUMS)
-hdiutil verify release/AppShelf-1.3.0.dmg
+hdiutil verify release/AppShelf-1.3.1.dmg
 ```
 
-推送 `v1.3.0` 标签会由 GitHub Actions 完成同样的校验并上传到 Release。
+## 持续集成与发布 / CI and Release
 
-Pushing a `v1.3.0` tag runs the same checks in GitHub Actions and publishes the result to Releases.
+推送与 Pull Request 触发 `CI`：零警告构建、跑 `AppShelfCore` 单元测试、组装 `.app` 并断言包内版本号，产物作为工作流附件保留 7 天。
+
+Push and pull requests run `CI`: a warnings-as-errors build, the `AppShelfCore` tests, an assembled `.app`, and an assertion that the bundle reports a real version. The artifact is kept for 7 days.
+
+推送 `v*` 标签触发 `Release`：先跑测试，再构建 DMG，校验 `SHA256SUMS` 与 DMG 完整性，然后创建或更新对应 Release 并上传附件。发布只由标签驱动，推代码不会对外发布任何东西。
+
+Pushing a `v*` tag runs `Release`: tests first, then the DMG build, checksum and image verification, then create-or-update the release and upload the assets. Publishing is tag-driven only; pushing code never publishes anything.
+
+工作流会优先挑选 runner 镜像上已装的 Xcode 16+，并显式断言 Swift 6（`swift-testing` 需要），因此镜像升级时不会静默退回不支持测试的工具链。
+
+The workflow prefers an installed Xcode 16+ on the runner and asserts a Swift 6 toolchain, which `swift-testing` requires, so an image bump cannot silently fall back to a toolchain that cannot run the tests.
+
+发布一个新版本：
+
+To ship a release:
+
+```bash
+# 1. 先把版本号和更新记录写进 CHANGELOG.md 与 README.md
+# 2. 本地验证
+swift test && ./Scripts/build-release.sh 1.3.1
+# 3. 提交、打标签、推送
+git tag -a v1.3.1 -m "AppShelf 1.3.1" && git push origin main v1.3.1
+```
+
+标签推送后由 CI 出包，不必在本地上传安装包。
+
+The tag is enough: CI builds and attaches the installer.
 
 ## 项目结构 / Project Layout
 
@@ -195,9 +265,15 @@ Pushing a `v1.3.0` tag runs the same checks in GitHub Actions and publishes the 
 
 ## 数据范围 / Data Scope
 
-应用列表来自本机文件系统和 `NSWorkspace`。分组只写入当前用户的 `UserDefaults`；应用架不会上传应用列表，也不会移动、修改或卸载被发现的应用。点击“添加应用”时，macOS 的文件选择器只允许选择 `.app` 包。
+应用列表来自本机文件系统和 `NSWorkspace`。分组、隐藏名单、快捷工具与偏好只写入当前用户的 `UserDefaults`；应用架不会上传任何数据，也不会移动、修改或卸载被发现的应用。点击“添加应用”或从访达拖入时，只接受 `.app` 包。
 
-The app list comes from the local file system and `NSWorkspace`. Groups are stored in the current user's `UserDefaults`. AppShelf does not upload the app list and does not move, modify, or uninstall discovered apps. The file picker accepts `.app` bundles when you choose “Add app”.
+隐藏只是不在应用架里显示，不影响系统在启动台、聚焦与程序坞中照常使用该应用。
+
+导出的 JSON 备份包含分组、隐藏名单、快捷工具与偏好，不含应用本体信息；导入时会校验版本与条目，无法识别的部分跳过并说明。
+
+The app list comes from the local file system and `NSWorkspace`. Groups, the hidden list, quick tools and preferences are stored only in the current user's `UserDefaults`. AppShelf uploads nothing and never moves, modifies, or uninstalls a discovered app.
+
+Hiding an app only removes it from AppShelf; Launchpad, Spotlight and the Dock keep working as usual. An export holds your arrangement, not bundle metadata, and an import validates it first and reports what it skipped.
 
 磁盘占用 = 应用本体（`.app` 内文件大小）+ 该应用在本用户 `Library` 中的数据（`Application Support`、`Containers`、`Group Containers`、缓存、保存状态）。结果缓存在本机 `UserDefaults`，bundle 发生修改时会重新测量。
 
@@ -213,9 +289,18 @@ Disk usage is only measured once a tile scrolls onto the screen, so apps you nev
 
 ## 贡献 / Contributing
 
-欢迎提交 Issue 或 Pull Request。提交前请运行带 warnings-as-errors 的构建命令，并说明测试使用的 macOS 和 Swift 版本。
+欢迎提交 Issue 或 Pull Request。提交前请在本地跑一遍与 CI 相同的门禁，并说明测试使用的 macOS 和 Swift 版本。
 
-Issues and pull requests are welcome. Before submitting one, run the warnings-as-errors build and include the macOS and Swift versions used for testing.
+Run the same gates CI enforces before submitting, and include the macOS and Swift versions you tested on:
+
+```bash
+swift build -c debug -Xswiftc -warnings-as-errors
+swift test
+```
+
+纯逻辑放在 `Sources/AppShelfCore/`：那里不含界面代码，新增的排序、打分、编解码规则应当先在那里落住并补测试，再由 `Sources/AppShelf/` 消费。
+
+Keep new pure logic in `Sources/AppShelfCore/`, which has no UI code: ordering, scoring and codec rules belong there with tests, and the app target consumes them.
 
 ## 许可 / License
 
