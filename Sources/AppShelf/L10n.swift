@@ -1,6 +1,8 @@
+import Combine
 import Foundation
 import SwiftUI
-import Combine
+
+import AppShelfCore
 
 /// Localization manager.
 ///
@@ -9,14 +11,20 @@ import Combine
 /// usable in Chinese even before a language file exists. Bundled defaults ship
 /// inside the app; an external folder can add or override languages at runtime,
 /// which is how users contribute a new locale without recompiling.
+///
+/// Lookup and language resolution are delegated to `LocalizationResolver`, which is pure
+/// and unit-tested; this class only owns the loaded tables and the change notification.
 final class L10n: ObservableObject {
     static let shared = L10n()
 
     /// Selected language code. "system" follows the OS setting.
+    ///
+    /// `@Published` already emits `objectWillChange`; the previous `didSet` sent it a second
+    /// time, which made every observer rebuild twice per switch.
     @Published var language: String {
         didSet {
-            UserDefaults.standard.set(language, forKey: "AppShelf.language")
-            objectWillChange.send()
+            guard oldValue != language else { return }
+            UserDefaults.standard.set(language, forKey: ShelfDefaults.language)
         }
     }
 
@@ -31,9 +39,9 @@ final class L10n: ObservableObject {
         self.defaultLoadPath = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("AppShelf/Localization", isDirectory: true)
-        self.language = UserDefaults.standard.string(forKey: "AppShelf.language") ?? "system"
+        self.language = UserDefaults.standard.string(forKey: ShelfDefaults.language) ?? "system"
         loadBundled()
-        reloadExternal()
+        loadExternal()
     }
 
     // MARK: - Loading
@@ -44,24 +52,36 @@ final class L10n: ObservableObject {
                                           subdirectory: "Localization") else { return }
         for url in urls {
             let code = url.deletingPathExtension().lastPathComponent
-            if let dict = loadFile(url) { bundled[code] = dict }
+            if let dict = Self.loadFile(url) { bundled[code] = dict }
         }
     }
 
-    /// Re-scan the external folder. Call after dropping a new file in.
-    func reloadExternal() {
+    private func loadExternal() {
         external.removeAll()
         let fm = FileManager.default
-        guard fm.fileExists(atPath: defaultLoadPath.path) else { return }
-        guard let urls = try? fm.contentsOfDirectory(at: defaultLoadPath,
-                                                     includingPropertiesForKeys: nil) else { return }
+        guard fm.fileExists(atPath: defaultLoadPath.path),
+              let urls = try? fm.contentsOfDirectory(at: defaultLoadPath,
+                                                    includingPropertiesForKeys: nil) else { return }
         for url in urls where url.pathExtension.lowercased() == "json" {
             let code = url.deletingPathExtension().lastPathComponent
-            if let dict = loadFile(url) { external[code] = dict }
+            if let dict = Self.loadFile(url) { external[code] = dict }
         }
     }
 
-    private func loadFile(_ url: URL) -> [String: String]? {
+    /// Re-reads the external folder so a dropped-in language file takes effect without a
+    /// relaunch. Publishing the result is what lets the settings panel offer it at once.
+    ///
+    /// This used to run only during `init`, which meant the documented "add a language
+    /// without recompiling" workflow still required restarting the app.
+    func reloadExternal() {
+        loadExternal()
+        objectWillChange.send()
+    }
+
+    /// Number of languages found in the external folder, for the settings panel's feedback.
+    var externalLanguageCount: Int { external.keys.count }
+
+    private static func loadFile(_ url: URL) -> [String: String]? {
         guard let data = try? Data(contentsOf: url),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
             return nil
@@ -71,34 +91,24 @@ final class L10n: ObservableObject {
 
     // MARK: - Lookup
 
-    private var effectiveLanguage: String {
-        if language == "system" {
-            let pref = Locale.preferredLanguages.first ?? "en"
-            let lower = pref.lowercased()
-            if lower.hasPrefix("zh") { return "zh-Hans" }
-            if lower.hasPrefix("en") { return "en" }
-            return pref
-        }
-        return language
+    var effectiveLanguage: String {
+        LocalizationResolver.effectiveLanguage(selection: language,
+                                               preferredLanguages: Locale.preferredLanguages)
     }
 
     /// Languages the UI can switch to: system, plus every language that has a table.
     var availableLanguages: [String] {
-        var set = Set<String>()
-        set.formUnion(bundled.keys)
-        set.formUnion(external.keys)
-        set.insert("system")
-        let ordered = ["system", "zh-Hans", "en"]
-        let extra = set.subtracting(ordered).sorted()
-        return ordered.filter { set.contains($0) } + extra
+        LocalizationResolver.availableLanguages(bundled: bundled, external: external)
     }
 
     /// Translate `key`. `args` replaces `{placeholder}` tokens with values.
     func t(_ key: String, args: [String: String] = [:]) -> String {
-        let table: [String: String]? = external[effectiveLanguage] ?? bundled[effectiveLanguage]
-        var value = table?[key] ?? bundled["en"]?[key] ?? key
-        for (k, v) in args { value = value.replacingOccurrences(of: "{\(k)}", with: v) }
-        return value
+        let language = effectiveLanguage
+        let table = LocalizationResolver.table(bundled: bundled, external: external, language: language)
+        let resolved = LocalizationResolver.resolve(key: key,
+                                                    table: table,
+                                                    englishFallback: bundled["en"] ?? [:])
+        return LocalizationResolver.substitute(resolved, args: args)
     }
 
     /// Human-readable label for a language code, shown in the switch menu.

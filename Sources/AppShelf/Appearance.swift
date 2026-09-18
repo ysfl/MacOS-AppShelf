@@ -3,19 +3,22 @@ import SwiftUI
 import AppKit
 import Combine
 
+import AppShelfCore
+
 /// Controls the app-wide appearance: follow the OS, force light, or force dark.
 final class Appearance: ObservableObject {
     static let shared = Appearance()
 
     @Published var mode: AppearanceMode {
         didSet {
-            UserDefaults.standard.set(mode.rawValue, forKey: "AppShelf.appearance")
+            guard oldValue != mode else { return }
+            UserDefaults.standard.set(mode.rawValue, forKey: ShelfDefaults.appearance)
             apply()
         }
     }
 
     private init() {
-        let raw = UserDefaults.standard.string(forKey: "AppShelf.appearance") ?? "system"
+        let raw = UserDefaults.standard.string(forKey: ShelfDefaults.appearance) ?? "system"
         self.mode = AppearanceMode(rawValue: raw) ?? .system
     }
 

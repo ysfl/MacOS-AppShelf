@@ -2,66 +2,36 @@ import AppKit
 import Carbon.HIToolbox
 import Foundation
 
-/// A global shortcut for the Spotlight-style search panel.
-/// `keyCode` is a virtual key code and `carbonModifiers` is a Carbon modifier mask.
-struct HotKey: Codable, Equatable, Sendable {
-    var keyCode: UInt32
-    var carbonModifiers: UInt32
-    var display: String
+import AppShelfCore
 
-    /// Option-Space, the same space many launchers use and one Spotlight leaves free.
-    static let fallback = HotKey(keyCode: UInt32(kVK_Space), carbonModifiers: UInt32(optionKey), display: "⌥Space")
-
-    /// The recorder writes this when the user clears the shortcut.
-    static let disabled = HotKey(keyCode: UInt32.max, carbonModifiers: 0, display: L10n.shared.t("未设置"))
-
-    var isEnabled: Bool { keyCode != UInt32.max }
-}
+// Re-exported so the app target can spell `HotKey` without qualifying it.
+typealias HotKey = AppShelfCore.HotKey
 
 extension HotKey {
+    /// Builds a shortcut from the key event the recorder captured.
     init(event: NSEvent) {
-        self.keyCode = UInt32(event.keyCode)
-        self.carbonModifiers = Self.carbonFlags(from: event.modifierFlags)
-        self.display = Self.displayString(
-            modifiers: event.modifierFlags,
-            keyCode: event.keyCode,
-            characters: event.charactersIgnoringModifiers ?? ""
-        )
+        let modifiers = KeyModifiers(cocoaFlags: event.modifierFlags.intersection([.command, .option, .control, .shift]))
+        let characters = event.charactersIgnoringModifiers ?? ""
+        let label = HotKeyDisplay.string(modifiers: modifiers,
+                                         keyCode: event.keyCode,
+                                         characters: characters,
+                                         unknownKeyLabel: { L10n.shared.t("key_code", args: ["n": "\($0)"]) })
+        self.init(keyCode: UInt32(event.keyCode),
+                  carbonModifiers: modifiers.carbonMask,
+                  display: label)
     }
+}
 
-    /// Converts Cocoa modifier flags to the Carbon mask `RegisterEventHotKey` expects.
-    static func carbonFlags(from flags: NSEvent.ModifierFlags) -> UInt32 {
-        var carbon: UInt32 = 0
-        if flags.contains(.command) { carbon |= UInt32(cmdKey) }
-        if flags.contains(.shift) { carbon |= UInt32(shiftKey) }
-        if flags.contains(.option) { carbon |= UInt32(optionKey) }
-        if flags.contains(.control) { carbon |= UInt32(controlKey) }
-        return carbon
+extension KeyModifiers {
+    /// Maps the Cocoa modifier set onto the script-independent one used by the codec.
+    init(cocoaFlags flags: NSEvent.ModifierFlags) {
+        var result: KeyModifiers = []
+        if flags.contains(.command) { result.insert(.command) }
+        if flags.contains(.option) { result.insert(.option) }
+        if flags.contains(.control) { result.insert(.control) }
+        if flags.contains(.shift) { result.insert(.shift) }
+        self = result
     }
-
-    /// Builds the visible combination, e.g. "⌥⇧A".
-    static func displayString(modifiers: NSEvent.ModifierFlags, keyCode: UInt16, characters: String) -> String {
-        var prefix = ""
-        if modifiers.contains(.control) { prefix += "⌃" }
-        if modifiers.contains(.option) { prefix += "⌥" }
-        if modifiers.contains(.shift) { prefix += "⇧" }
-        if modifiers.contains(.command) { prefix += "⌘" }
-        return prefix + keyName(keyCode: keyCode, characters: characters)
-    }
-
-    static func keyName(keyCode: UInt16, characters: String) -> String {
-        if let named = specialKeyNames[Int(keyCode)] { return named }
-        let upper = characters.uppercased()
-        return upper.isEmpty ? L10n.shared.t("key_code", args: ["n": "\(keyCode)"]) : upper
-    }
-
-    private static let specialKeyNames: [Int: String] = [
-        36: "↩", 76: "⌤", 48: "⇥", 49: "Space", 51: "⌫", 53: "⎋", 117: "⌦",
-        115: "↖", 119: "↘", 116: "⇞", 121: "⇟",
-        123: "←", 124: "→", 125: "↓", 126: "↑",
-        122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6",
-        98: "F7", 100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12"
-    ]
 }
 
 /// Registers the hotkey with Carbon so the panel can be opened from any app.
@@ -128,43 +98,35 @@ final class HotKeyCenter {
 final class HotKeyStore: ObservableObject {
     static let shared = HotKeyStore()
 
-    private enum Key {
-        static let shortcut = "AppShelf.hotkey.v1"
-        static let statusItem = "AppShelf.statusItem.v1"
-    }
-
+    /// The shortcut in force. `.disabled` is a real, persisted choice, not a missing value.
     @Published var shortcut: HotKey {
         didSet { persistShortcut() }
     }
 
     @Published var showsStatusItem: Bool {
-        didSet { UserDefaults.standard.set(showsStatusItem, forKey: Key.statusItem) }
+        didSet { UserDefaults.standard.set(showsStatusItem, forKey: ShelfDefaults.statusItem) }
     }
 
     /// Set when Carbon refuses a registration, so the settings UI can explain it.
     @Published var registrationFailed = false
 
     private init() {
-        if let data = UserDefaults.standard.data(forKey: Key.shortcut),
-           let saved = try? JSONDecoder().decode(HotKey.self, from: data),
-           saved.isEnabled {
-            shortcut = saved
-        } else {
-            shortcut = .fallback
+        // `.disabled` used to fall into the same branch as "nothing stored", which quietly
+        // handed ⌥Space back on every launch and made 停用 last only for one session.
+        switch HotKeyCodec.decode(UserDefaults.standard.data(forKey: ShelfDefaults.hotKey)) {
+        case .enabled(let saved): shortcut = saved
+        case .disabled: shortcut = .disabled
+        case .unset: shortcut = .fallback
         }
-        showsStatusItem = UserDefaults.standard.object(forKey: Key.statusItem) as? Bool ?? true
+        showsStatusItem = UserDefaults.standard.object(forKey: ShelfDefaults.statusItem) as? Bool ?? true
     }
 
-    func restoreDefault() {
-        shortcut = .fallback
-    }
+    func restoreDefault() { shortcut = .fallback }
 
-    func clear() {
-        shortcut = .disabled
-    }
+    func clear() { shortcut = .disabled }
 
     private func persistShortcut() {
-        guard let data = try? JSONEncoder().encode(shortcut) else { return }
-        UserDefaults.standard.set(data, forKey: Key.shortcut)
+        guard let data = HotKeyCodec.encode(shortcut) else { return }
+        UserDefaults.standard.set(data, forKey: ShelfDefaults.hotKey)
     }
 }

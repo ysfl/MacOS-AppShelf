@@ -2,6 +2,8 @@ import AppKit
 import Combine
 import SwiftUI
 
+import AppShelfCore
+
 /// Wires AppKit entry points that SwiftUI does not expose: the Dock menu, the menu bar
 /// icon, and the global hotkey that opens the Spotlight-style search panel.
 @MainActor
@@ -11,6 +13,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var store: LauncherStore?
     private var cancellables: Set<AnyCancellable> = []
+    /// Installed by the window scene, which is the only place `openWindow` is available.
+    private var openMainWindowAction: (() -> Void)?
+
+    static var shared: AppDelegate? { NSApp.delegate as? AppDelegate }
+
+    /// The store the settings window exports from and imports into.
+    var shelfStore: LauncherStore? { store }
 
     /// Called once the main window exists so the delegate can read the same store.
     func attach(store: LauncherStore) {
@@ -187,15 +196,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         toggleSearchPanel()
     }
 
-    @objc private func openMainWindow(_ sender: Any?) {
+    /// Called by the window scene so the delegate can ask SwiftUI for a fresh one.
+    func setOpenMainWindowAction(_ action: @escaping () -> Void) {
+        openMainWindowAction = action
+    }
+
+    /// Brings the shelf forward, creating the window when the user had closed it.
+    ///
+    /// `NSApp.activate` alone was a no-op with no windows on screen, which left no way at
+    /// all back into the app short of relaunching it.
+    func showMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: isMainWindow), window.isMiniaturized {
+            window.deminiaturize(nil)
+            return
+        }
+        if let window = NSApp.windows.first(where: isMainWindow) {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        openMainWindowAction?()
+    }
+
+    /// The shelf window, excluding the search panel and the settings window.
+    private func isMainWindow(_ window: NSWindow) -> Bool {
+        !(window is NSPanel)
+            && window.canBecomeMain
+            && window.contentView?.accessibilityLabel() != L10n.shared.t("设置")
+            && !(window is SettingsWindow)
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showMainWindow() }
+        return true
+    }
+
+    @objc private func openMainWindow(_ sender: Any?) {
+        showMainWindow()
     }
 
     @objc private func revealGroup(_ sender: NSMenuItem) {
         guard let identifier = sender.representedObject as? String,
               let id = UUID(uuidString: identifier) else { return }
         store?.selection = .group(id)
-        NSApp.activate(ignoringOtherApps: true)
+        showMainWindow()
     }
 
     @objc private func refreshApps(_ sender: Any?) {

@@ -1,18 +1,7 @@
 import AppKit
 import Foundation
 
-/// A user-picked app that behaves like a built-in quick tool.
-struct CustomQuickTool: Identifiable, Codable, Hashable {
-    let id: UUID
-    var name: String
-    var path: String
-
-    init(id: UUID = UUID(), name: String, path: String) {
-        self.id = id
-        self.name = name
-        self.path = path
-    }
-}
+import AppShelfCore
 
 /// One entry in the quick tool row: either a built-in utility or an app the user added.
 enum QuickToolItem: Identifiable, Hashable {
@@ -21,8 +10,8 @@ enum QuickToolItem: Identifiable, Hashable {
 
     var id: String {
         switch self {
-        case .builtin(let tool): return "builtin.\(tool.rawValue)"
-        case .custom(let tool): return "custom.\(tool.id.uuidString)"
+        case .builtin(let tool): return QuickToolID(tool.rawValue).rawValue
+        case .custom(let tool): return QuickToolID(tool.id).rawValue
         }
     }
 
@@ -58,27 +47,28 @@ enum QuickToolItem: Identifiable, Hashable {
 final class QuickToolStore: ObservableObject {
     static let shared = QuickToolStore()
 
-    private enum Key {
-        static let enabled = "AppShelf.quickTools.enabled.v1"
-        static let custom = "AppShelf.quickTools.custom.v1"
-    }
-
     @Published private(set) var enabledIDs: [String]
     @Published private(set) var customTools: [CustomQuickTool]
 
+    /// Tools removed by dragging, kept so the row can offer them back without a trip
+    /// through Settings.
+    private static var builtinIDs: [String] {
+        QuickTool.allCases.map { QuickToolID($0.rawValue).rawValue }
+    }
+
     private init() {
         let defaults = UserDefaults.standard
-        if let saved = defaults.array(forKey: Key.enabled) as? [String] {
+        if let saved = defaults.array(forKey: ShelfDefaults.quickToolsEnabled) as? [String] {
             // Keep unknown ids out, but make sure newly added built-ins still appear.
-            let known = Set(Self.allBuiltinIDs)
-            let filtered = saved.filter { known.contains($0) }
-            let missing = QuickTool.allCases.map { "builtin.\($0.rawValue)" }.filter { !filtered.contains($0) }
+            let known = Set(Self.builtinIDs)
+            let filtered = saved.filter { known.contains($0) || QuickToolID(parsing: $0)?.isCustom == true }
+            let missing = Self.builtinIDs.filter { !filtered.contains($0) }
             enabledIDs = filtered + missing
         } else {
-            enabledIDs = QuickTool.allCases.map { "builtin.\($0.rawValue)" }
+            enabledIDs = Self.builtinIDs
         }
 
-        if let data = defaults.data(forKey: Key.custom),
+        if let data = defaults.data(forKey: ShelfDefaults.quickToolsCustom),
            let saved = try? JSONDecoder().decode([CustomQuickTool].self, from: data) {
             customTools = saved
         } else {
@@ -86,23 +76,15 @@ final class QuickToolStore: ObservableObject {
         }
     }
 
-    private static var allBuiltinIDs: [String] {
-        QuickTool.allCases.map { "builtin.\($0.rawValue)" }
-    }
-
     /// Visible tools in the user's order.
-    var items: [QuickToolItem] {
-        enabledIDs.compactMap { resolve($0) }
-    }
+    var items: [QuickToolItem] { enabledIDs.compactMap { resolve($0) } }
 
     /// Everything that can be switched on, built-ins first.
     var allItems: [QuickToolItem] {
         QuickTool.allCases.map { QuickToolItem.builtin($0) } + customTools.map { QuickToolItem.custom($0) }
     }
 
-    func isEnabled(_ id: String) -> Bool {
-        enabledIDs.contains(id)
-    }
+    func isEnabled(_ id: String) -> Bool { enabledIDs.contains(id) }
 
     func setEnabled(_ id: String, isEnabled: Bool) {
         if isEnabled {
@@ -111,7 +93,7 @@ final class QuickToolStore: ObservableObject {
         } else {
             enabledIDs.removeAll { $0 == id }
         }
-        persistEnabled()
+        persist()
     }
 
     /// Moves a visible tool one slot up or down.
@@ -120,60 +102,76 @@ final class QuickToolStore: ObservableObject {
         let target = current + delta
         guard enabledIDs.indices.contains(target) else { return }
         enabledIDs.swapAt(current, target)
-        persistEnabled()
+        persist()
     }
 
     func addCustom(name: String, path: String) {
-        guard !customTools.contains(where: { $0.path == path }) else { return }
-        let tool = CustomQuickTool(name: name, path: path)
+        let normalized = ShelfPath.normalize(path)
+        guard !customTools.contains(where: { $0.path == normalized }) else { return }
+        let tool = CustomQuickTool(name: name, path: normalized)
         customTools.append(tool)
-        persistCustom()
-        enabledIDs.append(tool.quickToolID)
-        persistEnabled()
+        enabledIDs.append(QuickToolID(tool.id).rawValue)
+        persist()
     }
 
-    /// Drag-out removal: built-ins are hidden, user-added tools are deleted.
-    func remove(_ id: String) {
-        if id.hasPrefix("custom."),
-           let uuid = UUID(uuidString: String(id.dropFirst("custom.".count))) {
-            removeCustom(id: uuid)
-        } else {
+    /// Removes a tool from the row. Built-ins are only hidden; user-added tools are deleted.
+    ///
+    /// Returns the deleted entry so the caller can offer it back: drag-out used to destroy
+    /// a custom tool with no confirmation and no way back.
+    @discardableResult
+    func remove(_ id: String) -> CustomQuickTool? {
+        guard let tool = customTool(for: id) else {
             setEnabled(id, isEnabled: false)
+            return nil
         }
+        removeCustom(id: tool.id)
+        return tool
+    }
+
+    func customTool(for id: String) -> CustomQuickTool? {
+        guard case .custom(let uuid)? = QuickToolID(parsing: id) else { return nil }
+        return customTools.first { $0.id == uuid }
     }
 
     func removeCustom(id: UUID) {
         customTools.removeAll { $0.id == id }
-        persistCustom()
-        enabledIDs.removeAll { $0 == "custom.\(id.uuidString)" }
-        persistEnabled()
+        enabledIDs.removeAll { $0 == QuickToolID(id).rawValue }
+        persist()
+    }
+
+    func restoreCustom(_ tool: CustomQuickTool) {
+        guard !customTools.contains(where: { $0.id == tool.id }) else { return }
+        customTools.append(tool)
+        let id = QuickToolID(tool.id).rawValue
+        if !enabledIDs.contains(id) { enabledIDs.append(id) }
+        persist()
+    }
+
+    /// Replaces both lists at once, used by undo and by import.
+    func restore(enabledIDs: [String], custom: [CustomQuickTool]) {
+        let known = Set(custom.map { QuickToolID($0.id).rawValue })
+        let builtins = Set(Self.builtinIDs)
+        self.enabledIDs = enabledIDs.filter { builtins.contains($0) || known.contains($0) }
+        self.customTools = custom
+        persist()
     }
 
     func resolve(_ id: String) -> QuickToolItem? {
-        if id.hasPrefix("builtin.") {
-            let rawValue = String(id.dropFirst("builtin.".count))
+        guard let parsed = QuickToolID(parsing: id) else { return nil }
+        switch parsed {
+        case .builtin(let rawValue):
             guard let tool = QuickTool(rawValue: rawValue) else { return nil }
             return .builtin(tool)
-        }
-        if id.hasPrefix("custom.") {
-            let rawValue = String(id.dropFirst("custom.".count))
-            guard let uuid = UUID(uuidString: rawValue),
-                  let tool = customTools.first(where: { $0.id == uuid }) else { return nil }
+        case .custom(let uuid):
+            guard let tool = customTools.first(where: { $0.id == uuid }) else { return nil }
             return .custom(tool)
         }
-        return nil
     }
 
-    private func persistEnabled() {
-        UserDefaults.standard.set(enabledIDs, forKey: Key.enabled)
-    }
-
-    private func persistCustom() {
+    private func persist() {
+        let defaults = UserDefaults.standard
+        defaults.set(enabledIDs, forKey: ShelfDefaults.quickToolsEnabled)
         guard let data = try? JSONEncoder().encode(customTools) else { return }
-        UserDefaults.standard.set(data, forKey: Key.custom)
+        defaults.set(data, forKey: ShelfDefaults.quickToolsCustom)
     }
-}
-
-private extension CustomQuickTool {
-    var quickToolID: String { "custom.\(id.uuidString)" }
 }

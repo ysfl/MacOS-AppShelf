@@ -3,179 +3,9 @@ import Combine
 import Foundation
 import SwiftUI
 
-/// A local snapshot of an application bundle shown in the launcher.
-/// The normalized bundle path is the stable identity used by groups and SwiftUI.
-struct AppItem: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let path: String
-    let bundleIdentifier: String?
-    let category: String
-    var isRunning: Bool
-    /// Precomputed pinyin and initials so typing in the search fields stays instant.
-    let searchTokens: SearchTokens
+import AppShelfCore
 
-    /// `aliases` carries names the app is known by but does not display, such as
-    /// localized bundle names and the on-disk file name.
-    init(
-        name: String,
-        path: String,
-        bundleIdentifier: String?,
-        category: String,
-        isRunning: Bool = false,
-        aliases: [String] = []
-    ) {
-        let normalizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
-        self.id = normalizedPath
-        self.name = name
-        self.path = normalizedPath
-        self.bundleIdentifier = bundleIdentifier
-        self.category = category
-        self.isRunning = isRunning
-        self.searchTokens = SearchTokens(
-            name: name,
-            aliases: aliases,
-            extras: [bundleIdentifier ?? "", category]
-        )
-    }
-
-    static func == (lhs: AppItem, rhs: AppItem) -> Bool {
-        lhs.id == rhs.id
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-    }
-}
-
-/// A user-defined collection of application bundle paths.
-/// Only paths are persisted; the bundle metadata is rebuilt during a scan.
-struct AppGroup: Identifiable, Codable, Hashable {
-    let id: UUID
-    var name: String
-    var symbol: String
-    var colorHex: String
-    var appPaths: [String]
-
-    var color: Color {
-        Color(hex: colorHex)
-    }
-
-    init(id: UUID = UUID(), name: String, symbol: String, colorHex: String, appPaths: [String] = []) {
-        self.id = id
-        self.name = name
-        self.symbol = symbol
-        self.colorHex = colorHex
-        self.appPaths = appPaths
-    }
-}
-
-/// The built-in views and user group that can be selected in the sidebar.
-enum ShelfSelection: Hashable {
-    case all
-    case running
-    case ungrouped
-    case group(UUID)
-}
-
-/// Apple utilities that can be launched even when they are not in the app grid.
-enum QuickTool: String, CaseIterable, Identifiable {
-    case calculator
-    case terminal
-    case activityMonitor
-    case screenshot
-    case systemSettings
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .calculator: return L10n.shared.t("计算器")
-        case .terminal: return L10n.shared.t("终端")
-        case .activityMonitor: return L10n.shared.t("活动监视器")
-        case .screenshot: return L10n.shared.t("截图")
-        case .systemSettings: return L10n.shared.t("系统设置")
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .calculator: return "plus.forwardslash.minus"
-        case .terminal: return "apple.terminal"
-        case .activityMonitor: return "waveform.path.ecg"
-        case .screenshot: return "rectangle.dashed.and.paperclip"
-        case .systemSettings: return "gearshape"
-        }
-    }
-
-    var bundleIdentifier: String {
-        switch self {
-        case .calculator: return "com.apple.calculator"
-        case .terminal: return "com.apple.Terminal"
-        case .activityMonitor: return "com.apple.ActivityMonitor"
-        case .screenshot: return "com.apple.screenshot"
-        case .systemSettings: return "com.apple.systempreferences"
-        }
-    }
-
-    var fallbackApplicationName: String {
-        switch self {
-        case .calculator: return "Calculator"
-        case .terminal: return "Terminal"
-        case .activityMonitor: return "Activity Monitor"
-        case .screenshot: return "Screenshot"
-        case .systemSettings: return "System Settings"
-        }
-    }
-
-    var fallbackPaths: [String] {
-        switch self {
-        case .calculator:
-            return ["/System/Applications/Calculator.app"]
-        case .terminal:
-            return ["/System/Applications/Utilities/Terminal.app"]
-        case .activityMonitor:
-            return ["/System/Applications/Utilities/Activity Monitor.app"]
-        case .screenshot:
-            return [
-                "/System/Applications/Utilities/Screenshot.app",
-                "/System/Applications/Screenshot.app"
-            ]
-        case .systemSettings:
-            return ["/System/Applications/System Settings.app"]
-        }
-    }
-}
-
-extension Color {
-    /// Decode the six- or eight-digit hex strings used by persisted group colors.
-    init(hex: String) {
-        let sanitized = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var value: UInt64 = 0
-        Scanner(string: sanitized).scanHexInt64(&value)
-
-        let red: Double
-        let green: Double
-        let blue: Double
-
-        switch sanitized.count {
-        case 6:
-            red = Double((value >> 16) & 0xFF) / 255
-            green = Double((value >> 8) & 0xFF) / 255
-            blue = Double(value & 0xFF) / 255
-        case 8:
-            red = Double((value >> 24) & 0xFF) / 255
-            green = Double((value >> 16) & 0xFF) / 255
-            blue = Double((value >> 8) & 0xFF) / 255
-        default:
-            red = 0.35
-            green = 0.40
-            blue = 0.48
-        }
-
-        self.init(red: red, green: green, blue: blue)
-    }
-}
+// MARK: - Discovery
 
 /// Finds launchable app bundles without modifying them.
 /// System background agents are omitted from the automatic scan to keep the list useful.
@@ -207,9 +37,9 @@ enum AppDiscoveryService {
         // bundle declares itself as a background or menu-bar app.
         for path in additionalPaths {
             let url = URL(fileURLWithPath: path)
-            if url.pathExtension.caseInsensitiveCompare("app") == .orderedSame,
-               FileManager.default.fileExists(atPath: url.path),
-               let item = makeItem(url: url, seen: &seen, allowsBackgroundApp: true) {
+            guard ShelfPath.isApplicationBundle(url.path),
+                  FileManager.default.fileExists(atPath: url.path) else { continue }
+            if let item = makeItem(url: url, seen: &seen, allowsBackgroundApp: true) {
                 items.append(item)
             }
         }
@@ -262,11 +92,11 @@ enum AppDiscoveryService {
         let isUIElement = bundle?.object(forInfoDictionaryKey: "LSUIElement") as? Bool ?? false
         guard allowsBackgroundApp || (!isBackgroundOnly && !isUIElement),
               seen.insert(normalized.path).inserted else { return nil }
-        let category = category(for: displayName, bundleIdentifier: bundleIdentifier)
+        let category = AppCategorizer.category(name: displayName, bundleIdentifier: bundleIdentifier)
 
         // "WeChat" is filed as 微信 in its own zh-Hans resources and "Code" is really
         // Visual Studio Code on disk, so search has to know about those names too.
-        var aliases = Self.localizedNames(in: normalized)
+        var aliases = localizedNames(in: normalized)
         let fileName = normalized.deletingPathExtension().lastPathComponent
         if fileName.caseInsensitiveCompare(displayName) != .orderedSame {
             aliases.append(fileName)
@@ -276,7 +106,7 @@ enum AppDiscoveryService {
             name: displayName,
             path: normalized.path,
             bundleIdentifier: bundleIdentifier,
-            category: category,
+            category: category.rawValue,
             aliases: aliases
         )
     }
@@ -303,46 +133,28 @@ enum AppDiscoveryService {
         }
         return names
     }
-
-    private static func category(for name: String, bundleIdentifier: String?) -> String {
-        let normalizedName = name.lowercased()
-        let normalizedIdentifier = (bundleIdentifier ?? "").lowercased()
-        let text = "\(normalizedName) \(normalizedIdentifier)"
-        let isCodeEditor = normalizedName == "code"
-            || normalizedName.contains("visual studio code")
-            || normalizedName.contains("codex")
-            || normalizedName.contains("claude code")
-            || normalizedIdentifier.contains("vscode")
-            || normalizedIdentifier.contains("visualstudio")
-
-        // Classification is deliberately keyword-based and conservative. Users can change
-        // group membership, so a wrong initial category does not change app behavior.
-        if isCodeEditor || containsAny(text, ["xcode", "android studio", "hbuilder", "dbeaver", "mqtt", "redis", "sequel", "fork", "docker", "terminal", "termius", "transmit", "postman", "charles", "reqable"]) {
-            return "开发"
-        }
-        if containsAny(text, ["wechat", "qq", "telegram", "discord", "dingtalk", "lark", "slack", "meeting", "teams", "chatgpt", "claude", "doubao", "qianwen", "workbuddy"]) {
-            return "沟通"
-        }
-        if containsAny(text, ["photoshop", "illustrator", "figma", "sketch", "keynote", "powerpoint", "premiere", "after effects", "pixelmator"]) {
-            return "创作"
-        }
-        if containsAny(text, ["safari", "chrome", "firefox", "arc", "edge", "browser", "obsidian", "notion", "word", "excel", "numbers", "pages", "quark", "baidu", "netdisk"]) {
-            return "日常"
-        }
-        if containsAny(text, ["calculator", "activity monitor", "screenshot", "system preferences", "system settings", "disk utility", "cleanmymac", "keka", "archive", "battery", "clash", "wireguard", "sunlogin", "utilities"]) {
-            return "工具"
-        }
-        return "其他"
-    }
-
-    private static func containsAny(_ text: String, _ values: [String]) -> Bool {
-        values.contains { text.contains($0) }
-    }
 }
+
+// MARK: - Undo
+
+/// A restorable point in the user's own arrangement.
+///
+/// Snapshot rather than inverse-operation: grouping, ordering, hiding and quick tools all
+/// cross-cut the same few lists, and restoring a whole snapshot is the only undo that
+/// stays correct as those models evolve.
+struct ShelfSnapshot: Equatable {
+    var groups: [AppGroup]
+    var hidden: HiddenAppList
+    var quickToolEnabledIDs: [String]
+    var customQuickTools: [CustomQuickTool]
+}
+
+// MARK: - Store
 
 /// Owns the discovered app snapshots and the user-editable group state for the window.
 @MainActor
 final class LauncherStore: ObservableObject {
+    /// Every discovered app, including hidden ones.
     @Published private(set) var apps: [AppItem] = [] {
         didSet {
             // Lookups happen once per scan rather than once per card per redraw.
@@ -350,40 +162,63 @@ final class LauncherStore: ObservableObject {
         }
     }
     @Published private(set) var groups: [AppGroup] = []
+    @Published private(set) var hidden = HiddenAppList()
     @Published var selection: ShelfSelection = .all
     @Published var query = ""
     @Published var runningOnly = false
     @Published private(set) var isLoading = true
+    /// When the file system was last scanned. Deliberately *not* bumped by the periodic
+    /// running-state tick: publishing it every few seconds invalidated the whole page,
+    /// which rebuilt every card for a timestamp that had not meaningfully changed.
     @Published private(set) var lastUpdated = Date()
     @Published var errorMessage: String?
     /// Short-lived feedback shown in the footer, e.g. after an app is dropped onto a group.
     @Published var statusMessage: String?
+    /// Set while a scan is running so a repeated Refresh cannot queue a second one.
+    @Published private(set) var isScanning = false
+
+    /// True when there is something to undo.
+    @Published private(set) var canUndo = false
 
     /// Disk and memory usage for the cards.
     let metrics = AppMetrics.shared
 
-
-    private let stateKey = "AppShelf.state.v2"
     private var appLookup: [String: AppItem] = [:]
     private var statusClearTask: Task<Void, Never>?
     private var loadedPersistedState = false
+    private var scanTask: Task<Void, Never>?
+    private var undoStack: [ShelfSnapshot] = []
+    private let undoLimit = 25
 
     init() {
         loadState()
         reload()
     }
 
+    // MARK: Derived views
+
+    /// Apps the user has not hidden. Everything the grid can show derives from this.
+    var visibleApps: [AppItem] { hidden.filtering(apps) }
+
     var selectedGroup: AppGroup? {
         guard case let .group(id) = selection else { return nil }
         return groups.first { $0.id == id }
     }
+
+    /// Group names are translated through the same table as everything else: a built-in
+    /// group's name *is* its Chinese key, so 开发 reads as "Development" in English while a
+    /// user-typed name like "AI 工具" has no entry and is shown as written.
+    func title(for group: AppGroup) -> String { L10n.shared.t(group.name) }
 
     var selectedTitle: String {
         switch selection {
         case .all: return L10n.shared.t("全部应用")
         case .running: return L10n.shared.t("正在运行")
         case .ungrouped: return L10n.shared.t("未分组")
-        case .group(let id): return groups.first { $0.id == id }?.name ?? L10n.shared.t("分组")
+        case .hidden: return L10n.shared.t("已隐藏")
+        case .group(let id):
+            guard let group = groups.first(where: { $0.id == id }) else { return L10n.shared.t("分组") }
+            return title(for: group)
         }
     }
 
@@ -392,45 +227,40 @@ final class LauncherStore: ObservableObject {
         case .all: return "square.grid.2x2.fill"
         case .running: return "bolt.fill"
         case .ungrouped: return "tray"
+        case .hidden: return "eye.slash.fill"
         case .group(let id): return groups.first { $0.id == id }?.symbol ?? "folder"
         }
     }
 
     /// Same filtering as `filteredApps` without the sort, for counts in the header.
-    var filteredCount: Int {
-        applyingFilters().count
-    }
+    var filteredCount: Int { applyingFilters().count }
 
-    var filteredApps: [AppItem] {
-        applyingFilters()
-    }
+    var filteredApps: [AppItem] { applyingFilters() }
 
     private func applyingFilters() -> [AppItem] {
         var result: [AppItem]
         // Apply the sidebar selection first, then the text and running-state filters.
         switch selection {
         case .all:
-            result = apps
+            result = visibleApps
         case .running:
-            result = apps.filter(\.isRunning)
+            result = visibleApps.filter(\.isRunning)
         case .ungrouped:
-            let groupedPaths = Set(groups.flatMap(\.appPaths).map(normalizePath))
-            result = apps.filter { !groupedPaths.contains($0.path) }
+            let grouped = MembershipIndex.groupedPaths(groups: groups)
+            result = visibleApps.filter { !grouped.contains($0.path) }
+        case .hidden:
+            return hiddenAppsInOrder()
         case .group(let id):
-            let paths = Set(groups.first { $0.id == id }?.appPaths.map(normalizePath) ?? [])
-            result = apps.filter { paths.contains($0.path) }
+            let paths = Set(groups.first { $0.id == id }?.normalizedPaths ?? [])
+            result = visibleApps.filter { paths.contains($0.path) }
         }
 
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedQuery.isEmpty {
             // While searching, relevance order wins over the running-first order below,
             // so the best match for "wx" stays at the top even when another app is running.
-            let rankedIDs = searchResults(for: trimmedQuery, limit: Int.max).map(\.id)
-            let visible = Dictionary(uniqueKeysWithValues: result.map { ($0.id, $0) })
-            let ranked = rankedIDs.compactMap { visible[$0] }
-            if runningOnly && selection != .running {
-                return ranked.filter(\.isRunning)
-            }
+            let ranked = SearchMatcher.ranked(result, query: trimmedQuery, limit: Int.max)
+            if runningOnly && selection != .running { return ranked.filter(\.isRunning) }
             return ranked
         }
 
@@ -444,21 +274,14 @@ final class LauncherStore: ObservableObject {
         }
     }
 
-    /// Ranked search across every discovered app.
-    /// Matches the name, the pinyin spelling, the initials, and loose subsequences.
+    private func hiddenAppsInOrder() -> [AppItem] {
+        apps.filter { hidden.contains($0.path) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Ranked search across every visible app.
     func searchResults(for query: String, limit: Int = 40) -> [AppItem] {
-        let scored: [(AppItem, Int)] = apps.compactMap { app in
-            guard let score = SearchMatcher.score(app.searchTokens, query: query) else { return nil }
-            return (app, score)
-        }
-
-        let sorted = scored.sorted { lhs, rhs in
-            if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
-            if lhs.0.isRunning != rhs.0.isRunning { return lhs.0.isRunning }
-            return lhs.0.name.localizedCaseInsensitiveCompare(rhs.0.name) == .orderedAscending
-        }
-
-        return Array(sorted.prefix(limit).map(\.0))
+        SearchMatcher.ranked(visibleApps, query: query, limit: limit)
     }
 
     /// Shows a short confirmation in the footer and clears it a few seconds later.
@@ -475,27 +298,53 @@ final class LauncherStore: ObservableObject {
     /// Return the sidebar count without applying the search field.
     func count(for selection: ShelfSelection) -> Int {
         switch selection {
-        case .all: return apps.count
-        case .running: return apps.filter(\.isRunning).count
+        case .all: return visibleApps.count
+        case .running: return visibleApps.filter(\.isRunning).count
         case .ungrouped:
-            let groupedPaths = Set(groups.flatMap(\.appPaths).map(normalizePath))
-            return apps.filter { !groupedPaths.contains($0.path) }.count
+            let grouped = MembershipIndex.groupedPaths(groups: groups)
+            return visibleApps.filter { !grouped.contains($0.path) }.count
+        case .hidden: return hidden.count
         case .group(let id):
-            let paths = Set(groups.first { $0.id == id }?.appPaths.map(normalizePath) ?? [])
-            return apps.filter { paths.contains($0.path) }.count
+            let paths = Set(groups.first { $0.id == id }?.normalizedPaths ?? [])
+            return visibleApps.filter { paths.contains($0.path) }.count
         }
     }
 
+    // MARK: Scanning
+
     /// Re-scan bundle locations and then merge the current running state.
+    ///
+    /// Discovery walks three directory trees and opens every `Info.plist` it finds, which
+    /// measured ~160 ms for 135 apps. It used to run inline, so `isLoading` never got a
+    /// RunLoop turn and the loading state could not be seen; now it is published first and
+    /// the walk happens off the main actor.
     func reload() {
+        guard !isScanning else { return }
+        isScanning = true
         isLoading = true
+
         // Saved paths are passed back into discovery so manually added apps survive a refresh.
         let savedPaths = groups.flatMap(\.appPaths)
-        var discovered = AppDiscoveryService.discover(additionalPaths: savedPaths)
+        let restoreDefaults = !loadedPersistedState
 
-        if !loadedPersistedState {
+        scanTask = Task { [weak self] in
+            let discovered = await Task.detached(priority: .userInitiated) {
+                AppDiscoveryService.discover(additionalPaths: savedPaths)
+            }.value
+
+            guard let self, !Task.isCancelled else { return }
+            self.applyScan(discovered, seedingDefaults: restoreDefaults)
+        }
+    }
+
+    private func applyScan(_ discovered: [AppItem], seedingDefaults: Bool) {
+        defer { isScanning = false; isLoading = false }
+
+        var discovered = discovered
+
+        if seedingDefaults {
             // Bootstrap defaults only once. Existing UserDefaults must remain user-owned.
-            groups = Self.defaultGroups()
+            groups = DefaultGroups.make()
             assignInitialGroups(for: discovered)
             loadedPersistedState = true
             persistState()
@@ -510,17 +359,17 @@ final class LauncherStore: ObservableObject {
 
         apps = discovered
         lastUpdated = Date()
-        isLoading = false
 
-        // Usage data is read in the background so the grid stays responsive. Disk
-        // size is requested per tile as it appears; memory here is already on the
-        // utility queue, so neither blocks this pile-up of redraws.
+        // Usage data is read in the background so the grid stays responsive. Disk size is
+        // requested per tile as it appears; memory is already on the utility queue, so
+        // neither blocks this pile-up of redraws.
         metrics.register(discovered)
         metrics.updateMemory(forAppPaths: Array(running.paths))
     }
 
-    /// Refresh only process state so a five-second timer does not repeatedly walk the file system.
+    /// Refresh only process state so a timer does not repeatedly walk the file system.
     func refreshRunningState() {
+        guard !isScanning else { return }
         let running = runningProcesses()
         let updated = apps.map { app -> AppItem in
             var item = app
@@ -528,16 +377,15 @@ final class LauncherStore: ObservableObject {
             return item
         }
 
-        // Publishing a new array every tick would rebuild every card three times a
-        // second, so the grid is only invalidated when something actually changed.
+        // Publishing a new array every tick would rebuild every card, so the grid is only
+        // invalidated when something actually changed.
         let didChange = zip(apps, updated).contains { $0.isRunning != $1.isRunning }
-        if didChange {
-            apps = updated
-        }
+        if didChange { apps = updated }
 
-        lastUpdated = Date()
         metrics.updateMemory(forAppPaths: Array(running.paths))
     }
+
+    // MARK: Launching
 
     /// Ask Launch Services to open a discovered bundle.
     @discardableResult
@@ -572,6 +420,21 @@ final class LauncherStore: ObservableObject {
         return false
     }
 
+    /// Opens a quick tool entry, which is either a built-in utility or a user-picked app.
+    @discardableResult
+    func launch(_ tool: QuickToolItem) -> Bool {
+        if case .builtin(let builtin) = tool { return launch(builtin) }
+
+        guard let path = tool.path else { return false }
+        let success = NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        if !success {
+            errorMessage = L10n.shared.t("cannot_open", args: ["name": tool.title])
+        } else {
+            refreshRunningState()
+        }
+        return success
+    }
+
     /// Quits a running app. `force` is the equivalent of `kill -9` and skips the
     /// app's own save and confirm steps.
     @discardableResult
@@ -586,28 +449,12 @@ final class LauncherStore: ObservableObject {
         let stopped = force ? running.forceTerminate() : running.terminate()
         if stopped {
             refreshRunningState()
-            note(force ? L10n.shared.t("force_quit_app", args: ["name": app.name]) : L10n.shared.t("quit_app", args: ["name": app.name]))
+            note(force ? L10n.shared.t("force_quit_app", args: ["name": app.name])
+                       : L10n.shared.t("quit_app", args: ["name": app.name]))
         } else {
             errorMessage = L10n.shared.t("cannot_quit", args: ["name": app.name])
         }
         return stopped
-    }
-
-    /// Opens a quick tool entry, which is either a built-in utility or a user-picked app.
-    @discardableResult
-    func launch(_ tool: QuickToolItem) -> Bool {
-        if case .builtin(let builtin) = tool {
-            return launch(builtin)
-        }
-
-        guard let path = tool.path else { return false }
-        let success = NSWorkspace.shared.open(URL(fileURLWithPath: path))
-        if !success {
-            errorMessage = L10n.shared.t("cannot_open", args: ["name": tool.title])
-        } else {
-            refreshRunningState()
-        }
-        return success
     }
 
     /// Reveal the bundle in Finder without changing its location.
@@ -615,21 +462,38 @@ final class LauncherStore: ObservableObject {
         NSWorkspace.shared.selectFile(app.path, inFileViewerRootedAtPath: "")
     }
 
+    func showPackageContents(_ app: AppItem) {
+        NSWorkspace.shared.open(URL(fileURLWithPath: app.path).appendingPathComponent("Contents"))
+    }
+
+    func copyBundleIdentifier(_ app: AppItem) {
+        guard let identifier = app.bundleIdentifier else {
+            errorMessage = L10n.shared.t("no_bundle_id", args: ["name": app.name])
+            return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(identifier, forType: .string)
+        note(L10n.shared.t("copied_bundle_id", args: ["id": identifier]))
+    }
+
+    // MARK: Groups
+
     /// Append a new group and select it so the user can add apps immediately.
     func createGroup(name: String, symbol: String, colorHex: String) {
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedName.isEmpty else { return }
+        willChangeArrangement()
         let group = AppGroup(name: cleanedName, symbol: symbol, colorHex: colorHex)
         groups.append(group)
         selection = .group(group.id)
         persistState()
     }
 
-    /// Update group presentation while preserving its app paths.
     func renameGroup(id: UUID, name: String, symbol: String, colorHex: String) {
         guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedName.isEmpty else { return }
+        willChangeArrangement()
         groups[index].name = cleanedName
         groups[index].symbol = symbol
         groups[index].colorHex = colorHex
@@ -639,214 +503,257 @@ final class LauncherStore: ObservableObject {
     /// Delete only the grouping metadata; application bundles remain untouched.
     func deleteGroup(id: UUID) {
         guard groups.count > 1, let index = groups.firstIndex(where: { $0.id == id }) else { return }
+        willChangeArrangement()
         groups.remove(at: index)
         if selection == .group(id) { selection = .all }
         persistState()
     }
 
+    /// Reorders groups, used when a sidebar row or an All Apps section header is dragged.
+    func moveGroup(_ id: UUID, before targetID: UUID) {
+        let reordered = ShelfOrdering.reorder(groups.map(\.id).map(\.uuidString),
+                                              moving: id.uuidString,
+                                              before: targetID.uuidString)
+        guard reordered != groups.map(\.id).map(\.uuidString) else { return }
+        willChangeArrangement()
+        let lookup = Dictionary(uniqueKeysWithValues: groups.map { ($0.id.uuidString, $0) })
+        groups = reordered.compactMap { lookup[$0] }
+        persistState()
+    }
+
+    // MARK: Membership
+
     /// Import selected bundles and attach their normalized paths to one group.
     func addApps(_ urls: [URL], to groupID: UUID) {
         guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        willChangeArrangement()
 
         for url in urls {
             guard let item = AppDiscoveryService.item(for: url) else { continue }
-            if !apps.contains(where: { $0.path == item.path }) {
-                apps.append(item)
-            }
-            if !groups[groupIndex].appPaths.contains(where: { normalizePath($0) == item.path }) {
+            if !apps.contains(where: { $0.path == item.path }) { apps.append(item) }
+            if !groups[groupIndex].appPaths.contains(where: { ShelfPath.normalize($0) == item.path }) {
                 groups[groupIndex].appPaths.append(item.path)
             }
+            hidden.reveal(item.path)
         }
 
-        apps.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        sortAppsByName()
+        metrics.register(apps)
         persistState()
     }
 
     /// Add an existing card to another group without removing its current membership.
     func addApp(_ app: AppItem, to groupID: UUID) {
         guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        if !groups[groupIndex].appPaths.contains(where: { normalizePath($0) == app.path }) {
-            groups[groupIndex].appPaths.append(app.path)
-            persistState()
-        }
+        guard !groups[groupIndex].appPaths.contains(where: { ShelfPath.normalize($0) == app.path }) else { return }
+        willChangeArrangement()
+        groups[groupIndex].appPaths.append(app.path)
+        persistState()
     }
 
     /// Remove a path from one group; the app remains available in All Apps.
+    func removeApp(_ path: String, from groupID: UUID) {
+        guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        let before = groups[groupIndex].appPaths.count
+        let target = ShelfPath.normalize(path)
+        let removed = groups[groupIndex].appPaths.filter { ShelfPath.normalize($0) == target }
+        guard !removed.isEmpty else { return }
+        willChangeArrangement()
+        groups[groupIndex].appPaths.removeAll { ShelfPath.normalize($0) == target }
+        guard groups[groupIndex].appPaths.count != before else { return }
+        persistState()
+        note(L10n.shared.t("removed_from_group", args: ["name": title(for: groups[groupIndex])]))
+    }
+
     func removeApp(_ app: AppItem, from groupID: UUID) {
         removeApp(app.path, from: groupID)
     }
 
-    /// Removes the app from a group by path, and reports the change in the footer.
-    func removeApp(_ path: String, from groupID: UUID) {
-        guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        let before = groups[groupIndex].appPaths.count
-        groups[groupIndex].appPaths.removeAll { normalizePath($0) == path }
-        guard groups[groupIndex].appPaths.count != before else { return }
-        persistState()
-        note(L10n.shared.t("removed_from_group", args: ["name": groups[groupIndex].name]))
-    }
-
     /// Every group this app currently belongs to, used by the card's context menu.
-    func groupMembership() -> [String: [AppGroup]] {
-        var membership: [String: [AppGroup]] = [:]
-        for group in groups {
-            for path in group.appPaths {
-                membership[normalizePath(path), default: []].append(group)
-            }
-        }
-        return membership
+    func groupMembership() -> [String: [AppGroup]] { MembershipIndex.build(groups: groups) }
+
+    /// Apps of one group in the order the user arranged them.
+    func orderedApps(in groupID: UUID) -> [AppItem] {
+        groups.first { $0.id == groupID }?.normalizedPaths.compactMap { appLookup[$0] } ?? []
     }
 
-    /// Adds bundle paths dropped onto a sidebar group. Anything that is not an existing
-    /// `.app` bundle is ignored, so dropped text cannot create broken entries.
+    /// Apps that are not part of any group.
+    func ungroupedApps() -> [AppItem] {
+        MembershipIndex.ungrouped(visibleApps, groups: groups)
+    }
+
+    /// Adds bundle paths dropped onto a group. Anything that is not an existing `.app`
+    /// bundle is ignored, so dropped text cannot create broken entries.
     func addApps(_ paths: [String], to groupID: UUID) {
         guard let groupIndex = groups.firstIndex(where: { $0.id == groupID }) else { return }
         var addedCount = 0
+        var pending: [AppItem] = []
 
         for path in paths {
-            guard path.hasSuffix(".app"), FileManager.default.fileExists(atPath: path) else { continue }
-            guard let item = AppDiscoveryService.item(for: URL(fileURLWithPath: path)) else { continue }
-
-            if !apps.contains(where: { $0.path == item.path }) {
-                apps.append(item)
-            }
-            if !groups[groupIndex].appPaths.contains(where: { normalizePath($0) == item.path }) {
-                groups[groupIndex].appPaths.append(item.path)
+            let url = URL(fileURLWithPath: path)
+            guard ShelfPath.isApplicationBundle(path), FileManager.default.fileExists(atPath: path),
+                  let item = AppDiscoveryService.item(for: url) else { continue }
+            if !apps.contains(where: { $0.path == item.path }) { pending.append(item) }
+            if !groups[groupIndex].appPaths.contains(where: { ShelfPath.normalize($0) == item.path }) {
                 addedCount += 1
             }
         }
 
         guard addedCount > 0 else { return }
+        willChangeArrangement()
 
-        apps.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        for item in pending where !apps.contains(where: { $0.path == item.path }) {
+            apps.append(item)
+            hidden.reveal(item.path)
+        }
+        for path in paths {
+            let normalized = ShelfPath.normalize(path)
+            guard ShelfPath.isApplicationBundle(normalized),
+                  !groups[groupIndex].appPaths.contains(where: { ShelfPath.normalize($0) == normalized }) else { continue }
+            groups[groupIndex].appPaths.append(normalized)
+        }
+
+        sortAppsByName()
         metrics.register(apps)
         persistState()
-        note(L10n.shared.t("added_to_group", args: ["count": "\(addedCount)", "name": groups[groupIndex].name]))
+        note(L10n.shared.t("added_to_group", args: ["count": "\(addedCount)", "name": title(for: groups[groupIndex])]))
     }
 
-    /// Reorders groups, used when a sidebar row or an All Apps section header is dragged.
-    func moveGroup(_ id: UUID, before targetID: UUID) {
-        guard id != targetID,
-              let from = groups.firstIndex(where: { $0.id == id }),
-              let to = groups.firstIndex(where: { $0.id == targetID }) else { return }
-
-        let group = groups.remove(at: from)
-        // Removing the dragged row shifts every later index down by one.
-        groups.insert(group, at: from < to ? to - 1 : to)
-        persistState()
-    }
-
-    /// Apps of one group in the order the user arranged them.
-    func orderedApps(in groupID: UUID) -> [AppItem] {
-        let order = groups.first { $0.id == groupID }?.appPaths.map(normalizePath) ?? []
-        return order.compactMap { appLookup[$0] }
-    }
-
-    /// Apps that are not part of any group.
-    func ungroupedApps() -> [AppItem] {
-        let groupedPaths = Set(groups.flatMap(\.appPaths).map(normalizePath))
-        return apps
-            .filter { !groupedPaths.contains($0.path) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    /// Drops dragged cards ahead of `target` inside one group, which both reorders
-    /// existing members and files new ones at that position.
-    /// `persist: false` is used by the live drag reflow, which can reorder many times
-    /// per gesture; the caller writes once when the drop lands.
-    func moveApps(_ draggedPaths: [String], before target: AppItem, in groupID: UUID, persist: Bool = true) {
-        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        var list = groups[index].appPaths.map(normalizePath)
-        var didChange = false
-
-        for dragged in draggedPaths.map(normalizePath) {
-            guard dragged != target.path else { continue }
-            list.removeAll { $0 == dragged }
-            if let targetIndex = list.firstIndex(of: target.path) {
-                list.insert(dragged, at: targetIndex)
-            } else {
-                list.append(dragged)
-            }
-            didChange = true
-        }
-
-        guard didChange else { return }
-        groups[index].appPaths = list
-        if persist { persistState() }
-    }
-
-    /// Places the dragged apps directly behind `target`.
+    /// Replaces a group's order in one step.
     ///
-    /// Needed for dragging to the right: "in front of the next tile" is a no-op when the
-    /// dragged app already sits there, which is what forced the user to overshoot a whole
-    /// tile before anything moved.
-    func moveApps(_ draggedPaths: [String], after target: AppItem, in groupID: UUID, persist: Bool = true) {
+    /// The index math lives in `ShelfOrdering`; this only decides whether anything changed,
+    /// records the undo point, and writes once.
+    func applyOrder(_ dragged: [String], placement: ShelfOrdering.Placement, in groupID: UUID) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        var list = groups[index].appPaths.map(normalizePath)
-        var didChange = false
+        let draggedPaths = dragged.map(ShelfPath.normalize)
+        let target = ShelfPath.normalize(placement.target)
+        let current = groups[index].normalizedPaths
 
-        for dragged in draggedPaths.map(normalizePath) {
-            guard dragged != target.path else { continue }
-            list.removeAll { $0 == dragged }
-            if let targetIndex = list.firstIndex(of: target.path) {
-                list.insert(dragged, at: targetIndex + 1)
-            } else {
-                list.append(dragged)
-            }
-            didChange = true
+        let next: [String]
+        switch placement.edge {
+        case .before: next = ShelfOrdering.move(draggedPaths, before: target, in: current)
+        case .after: next = ShelfOrdering.move(draggedPaths, after: target, in: current)
         }
+        guard next != current else { return }
 
-        guard didChange else { return }
-        groups[index].appPaths = list
-        if persist { persistState() }
-    }
-
-    /// Writes group state immediately. Drag reflows reorder without saving, so the
-    /// drop handler calls this once the arrangement is final.
-    func persistGroups() {
+        willChangeArrangement()
+        groups[index].appPaths = next
         persistState()
     }
 
-    /// Restore groups from the current user's defaults, falling back to the built-in set.
+    // MARK: Hiding
+
+    /// Takes an app off the shelf without touching the bundle.
+    func hideApp(_ app: AppItem) {
+        guard hidden.hide(app.path) else { return }
+        willChangeArrangement()
+        persistHidden()
+        note(L10n.shared.t("hidden_app", args: ["name": app.name]))
+    }
+
+    func revealApp(_ app: AppItem) {
+        guard hidden.reveal(app.path) else { return }
+        willChangeArrangement()
+        persistHidden()
+        note(L10n.shared.t("revealed_app", args: ["name": app.name]))
+    }
+
+    /// Brings every hidden app back at once, from the empty state of the hidden view.
+    func revealAllHidden() {
+        let count = hidden.count
+        guard count > 0 else { return }
+        willChangeArrangement()
+        hidden.revealAll()
+        if selection == .hidden { selection = .all }
+        persistHidden()
+        note(L10n.shared.t("revealed_all", args: ["count": "\(count)"]))
+    }
+
+    // MARK: Undo
+
+    /// Opens an undo point for a change made outside the store, such as a quick tool
+    /// removal. Callers must invoke this immediately before mutating.
+    func recordUndoPoint() { willChangeArrangement() }
+
+    /// Records the current arrangement before a change the user may want back.
+    private func willChangeArrangement() {
+        undoStack.append(currentSnapshot())
+        if undoStack.count > undoLimit { undoStack.removeFirst(undoStack.count - undoLimit) }
+        canUndo = true
+    }
+
+    func undo() {
+        guard let previous = undoStack.popLast() else { return }
+        applySnapshot(previous)
+        canUndo = !undoStack.isEmpty
+        note(L10n.shared.t("已撤销"))
+    }
+
+    private func currentSnapshot() -> ShelfSnapshot {
+        ShelfSnapshot(groups: groups,
+                      hidden: hidden,
+                      quickToolEnabledIDs: QuickToolStore.shared.enabledIDs,
+                      customQuickTools: QuickToolStore.shared.customTools)
+    }
+
+    private func applySnapshot(_ snapshot: ShelfSnapshot) {
+        groups = snapshot.groups
+        hidden = snapshot.hidden
+        if selection == .hidden, hidden.isEmpty { selection = .all }
+        QuickToolStore.shared.restore(enabledIDs: snapshot.quickToolEnabledIDs,
+                                     custom: snapshot.customQuickTools)
+        persistState()
+        persistHidden()
+    }
+
+    // MARK: Persistence
+
+    /// Writes group state immediately. Drop handlers call this once the arrangement is final.
+    func persistGroups() { persistState() }
+
     private func loadState() {
-        guard let data = UserDefaults.standard.data(forKey: stateKey),
-              let saved = try? JSONDecoder().decode([AppGroup].self, from: data),
-              !saved.isEmpty else {
-            groups = Self.defaultGroups()
-            return
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: ShelfDefaults.groupState),
+           let saved = try? JSONDecoder().decode([AppGroup].self, from: data),
+           !saved.isEmpty {
+            groups = saved
+            loadedPersistedState = true
+        } else {
+            groups = DefaultGroups.make()
         }
-        groups = saved
-        loadedPersistedState = true
+
+        if let data = defaults.data(forKey: ShelfDefaults.hiddenApps),
+           let saved = try? JSONDecoder().decode([String].self, from: data) {
+            hidden = HiddenAppList(paths: saved)
+        }
     }
 
     /// Encode only the small, user-editable group model; bundle metadata is never persisted.
     private func persistState() {
         guard let data = try? JSONEncoder().encode(groups) else { return }
-        UserDefaults.standard.set(data, forKey: stateKey)
+        UserDefaults.standard.set(data, forKey: ShelfDefaults.groupState)
+    }
+
+    private func persistHidden() {
+        guard let data = try? JSONEncoder().encode(Array(hidden.paths).sorted()) else { return }
+        UserDefaults.standard.set(data, forKey: ShelfDefaults.hiddenApps)
     }
 
     private func assignInitialGroups(for discovered: [AppItem]) {
         // This is a one-time convenience pass, not a permanent categorization rule.
-        let commonNames = ["safari", "google chrome", "visual studio code", "xcode", "terminal", "chatgpt", "obsidian"]
-
         for app in discovered {
-            let targetName: String?
-            if commonNames.contains(where: { app.name.localizedCaseInsensitiveCompare($0) == .orderedSame }) {
-                targetName = "常用"
-            } else if ["开发", "沟通", "创作", "日常", "工具"].contains(app.category) {
-                targetName = app.category
-            } else {
-                targetName = nil
-            }
-
-            guard let targetName,
-                  let index = groups.firstIndex(where: { $0.name == targetName }) else { continue }
+            guard let target = AppCategorizer.seedGroup(for: app.name, bundleIdentifier: app.bundleIdentifier),
+                  let index = groups.firstIndex(where: { $0.name == target.rawValue }) else { continue }
             groups[index].appPaths.append(app.path)
         }
     }
 
+    private func sortAppsByName() {
+        apps.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     /// Bundle paths paired with pids, so card footers can show both size and memory.
-    private func runningProcesses() -> (paths: Set<String>, processes: [(path: String, pid: Int32)]) {
+    func runningProcesses() -> (paths: Set<String>, processes: [(path: String, pid: Int32)]) {
         var paths: Set<String> = []
         var processes: [(path: String, pid: Int32)] = []
 
@@ -859,20 +766,52 @@ final class LauncherStore: ObservableObject {
 
         return (paths, processes)
     }
+}
 
-    private func normalizePath(_ path: String) -> String {
-        URL(fileURLWithPath: path).standardizedFileURL.path
+// MARK: - Export / import
+
+extension LauncherStore {
+    /// Everything the user arranged, as a portable payload.
+    func exportSnapshot() -> ShelfExport {
+        ShelfExport(groups: groups,
+                    hiddenApps: Array(hidden.paths).sorted(),
+                    preferences: .init(language: L10n.shared.language,
+                                       appearance: Appearance.shared.mode.rawValue,
+                                       showsStatusItem: HotKeyStore.shared.showsStatusItem,
+                                       hotKey: HotKeyStore.shared.shortcut),
+                    quickTools: .init(enabledIDs: QuickToolStore.shared.enabledIDs,
+                                       custom: QuickToolStore.shared.customTools))
     }
 
-    /// Starter groups shown on a first launch.
-    private static func defaultGroups() -> [AppGroup] {
-        [
-            AppGroup(name: "常用", symbol: "star.fill", colorHex: "#F59E0B"),
-            AppGroup(name: "开发", symbol: "hammer.fill", colorHex: "#2F80ED"),
-            AppGroup(name: "沟通", symbol: "bubble.left.and.bubble.right.fill", colorHex: "#16A085"),
-            AppGroup(name: "创作", symbol: "wand.and.stars", colorHex: "#D14D72"),
-            AppGroup(name: "日常", symbol: "house.fill", colorHex: "#7C5CFC"),
-            AppGroup(name: "工具", symbol: "wrench.and.screwdriver.fill", colorHex: "#64748B")
-        ]
+    /// Applies an import, reporting what had to be dropped. Returns false when refused.
+    @discardableResult
+    func applyImport(_ export: ShelfExport) -> Bool {
+        let result = ShelfImport.validate(export)
+        switch result.report {
+        case .unsupportedVersion(let found, let supported):
+            errorMessage = L10n.shared.t("import_version_too_new",
+                                         args: ["found": "\(found)", "supported": "\(supported)"])
+            return false
+        case .appliedWithWarnings(let warnings):
+            note(L10n.shared.t("import_partial", args: ["count": "\(warnings.count)"]))
+        case .valid:
+            break
+        }
+
+        guard let cleaned = result.cleaned else { return false }
+
+        willChangeArrangement()
+        groups = cleaned.groups
+        hidden = HiddenAppList(paths: cleaned.hiddenApps)
+        if selection == .hidden, hidden.isEmpty { selection = .all }
+        L10n.shared.language = cleaned.preferences.language
+        Appearance.shared.mode = AppearanceMode(rawValue: cleaned.preferences.appearance) ?? .system
+        HotKeyStore.shared.showsStatusItem = cleaned.preferences.showsStatusItem
+        HotKeyStore.shared.shortcut = cleaned.preferences.hotKey ?? .fallback
+        QuickToolStore.shared.restore(enabledIDs: cleaned.quickTools.enabledIDs,
+                                     custom: cleaned.quickTools.custom)
+        persistState()
+        persistHidden()
+        return true
     }
 }

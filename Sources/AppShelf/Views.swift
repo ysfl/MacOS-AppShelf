@@ -2,15 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Shared colors for the launcher shell and its controls.
-enum AppShelfPalette {
-    static let sidebar = Color(nsColor: .underPageBackgroundColor)
-    static let canvas = Color(nsColor: .windowBackgroundColor)
-    static let panel = Color(nsColor: .controlBackgroundColor)
-    static let border = Color.black.opacity(0.08)
-    static let accent = Color(red: 0.12, green: 0.42, blue: 0.86)
-    static let success = Color(red: 0.12, green: 0.60, blue: 0.42)
-}
+import AppShelfCore
 
 extension UTType {
     /// One in-app drag type for every draggable thing in the window.
@@ -20,58 +12,7 @@ extension UTType {
     static let appShelfDragItem = UTType(exportedAs: "local.dan.AppShelf.drag")
 }
 
-/// Where a drag is currently hovering.
-///
-/// This lives in its own object instead of the content view on purpose: only the small
-/// highlight views observe it, so moving the cursor during a drag repaints a few
-/// outlines rather than rebuilding every card in the window.
-/// Whether a drag is in progress at all.
-///
-/// Deliberately separate from `DragHighlight`: that object publishes on every pointer
-/// move, so subscribing every tile to it would repaint the whole grid while dragging.
-/// This one only changes twice per drag, so tiles can safely watch it to draw their
-/// outline.
-/// Geometry of the app grid, needed to slide a tile by exactly one slot.
-///
-/// The slide is a transform, so the grid is never laid out again mid-drag. Reordering
-/// the data on every hover (the previous approach) forced a full relayout of every
-/// tile, which is why the motion felt heavy.
-final class GridMetrics: ObservableObject {
-    static let shared = GridMetrics()
-
-    /// Distance between two neighbouring column origins (column width + spacing).
-    @Published private(set) var columnStep: CGFloat = 150
-    /// Distance between two neighbouring row origins (row height + spacing).
-    @Published private(set) var rowStep: CGFloat = 174
-    @Published private(set) var columns: Int = 1
-
-    /// Must track `appGridColumns` and the grid spacings, or slides land off-target.
-    private static let minimum: CGFloat = 136
-    private static let maximum: CGFloat = 176
-    private static let columnSpacing: CGFloat = 14
-    private static let rowSpacing: CGFloat = 16
-
-    /// Mirrors `GridItem(.adaptive(minimum:maximum:))`: fit as many columns as possible
-    /// at the minimum width, then spread the leftover up to the maximum.
-    func update(width: CGFloat, height: CGFloat, count: Int) {
-        guard width > 0, count > 0 else { return }
-
-        let fitted = Int((width + Self.columnSpacing) / (Self.minimum + Self.columnSpacing))
-        let newColumns = max(1, fitted)
-        let columnWidth = (width - Self.columnSpacing * CGFloat(newColumns - 1)) / CGFloat(newColumns)
-        let clamped = min(max(columnWidth, Self.minimum), Self.maximum)
-
-        let rows = max(1, Int((Double(count) / Double(newColumns)).rounded(.up)))
-        let rowHeight = (height - Self.rowSpacing * CGFloat(rows - 1)) / CGFloat(rows)
-
-        if columns != newColumns { columns = newColumns }
-        if abs(columnStep - (clamped + Self.columnSpacing)) > 0.5 {
-            columnStep = clamped + Self.columnSpacing
-        }
-        let newRowStep = rowHeight > 0 ? rowHeight + Self.rowSpacing : Self.rowSpacing
-        if abs(rowStep - newRowStep) > 0.5 { rowStep = newRowStep }
-    }
-}
+// MARK: - Drag state
 
 /// Live state of an in-group drag: which slot was picked up, and which slot the pointer
 /// is over.
@@ -107,30 +48,21 @@ final class DragReflow: ObservableObject {
     }
 }
 
-private extension View {
-    /// Applies `transform` only when `condition` holds, without forcing both branches
-    /// into one type.
-    @ViewBuilder func when<Content: View>(_ condition: Bool, _ transform: (Self) -> Content) -> some View {
-        if condition { transform(self) } else { self }
-    }
-}
-
-/// Reports the grid's own size without taking part in layout.
-private struct GridSizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
-        let next = nextValue()
-        if next != .zero { value = next }
-    }
-}
-
+/// Whether a drag is in progress at all, and which app is being carried.
+///
+/// Deliberately separate from the highlight object: that one publishes on every pointer
+/// move, so subscribing every tile to it would repaint the whole grid while dragging.
+/// This one only changes twice per drag, so tiles can safely watch it to draw their
+/// outline and fade themselves out of the grid.
 final class DragActivity: ObservableObject {
     static let shared = DragActivity()
 
     @Published private(set) var isActive = false
-    /// The app being dragged. Tiles watch this to fade themselves out of the grid,
-    /// since the card under the cursor is the one that should look solid.
     @Published private(set) var sourcePath: String?
+    /// The block the carried app was picked up from. An app can sit in several groups and
+    /// then shows one card per group; without this, carrying it blanked *every* one of its
+    /// cards at once instead of only the one under the cursor.
+    @Published private(set) var sourceGroupID: UUID?
 
     private var endWork: DispatchWorkItem?
     private var safetyWork: DispatchWorkItem?
@@ -142,12 +74,13 @@ final class DragActivity: ObservableObject {
         scheduleSafetyNet()
     }
 
-    func begin(path: String) {
+    func begin(path: String, groupID: UUID?) {
         begin()
         sourcePath = path
+        sourceGroupID = groupID
     }
 
-    /// Last-resort reset. A drag that is cancelled with Esc, released over nothing, or
+    /// Last-resort reset. A drag that is cancelled with Esc, released over empty space, or
     /// never started properly never reaches a drop handler, and the delete strips and
     /// outlines would otherwise stay on screen until the app was restarted.
     private func scheduleSafetyNet() {
@@ -174,6 +107,7 @@ final class DragActivity: ObservableObject {
         safetyWork = nil
         isActive = false
         sourcePath = nil
+        sourceGroupID = nil
         DragReflow.shared.clear()
     }
 
@@ -183,9 +117,10 @@ final class DragActivity: ObservableObject {
         endWork?.cancel()
         let work = DispatchWorkItem {
             self.isActive = false
+            self.sourcePath = nil
+            self.sourceGroupID = nil
             // A drag abandoned outside any target never reaches a drop handler, so the
             // held tile has to be released here or it would stay faded.
-            self.sourcePath = nil
             DragReflow.shared.clear()
         }
         endWork = work
@@ -193,29 +128,22 @@ final class DragActivity: ObservableObject {
     }
 }
 
+/// Where a drag is currently hovering.
+///
+/// This lives in its own object instead of the content view on purpose: only the small
+/// highlight views observe it, so moving the cursor during a drag repaints a few
+/// outlines rather than rebuilding every card in the window.
 final class DragHighlight: ObservableObject {
     static let shared = DragHighlight()
 
     @Published var sectionTargetID: UUID?
     @Published var sidebarGroupID: UUID?
-    @Published var quickToolTarget = false
-    /// App being dragged, captured when the drag starts so tiles can make room for it.
-    var sourcePath: String? { DragActivity.shared.sourcePath }
 
-    /// True for the whole drag, not just while a target is under the cursor.
-    /// The remove strips stay visible for the entire drag so they cannot flicker
-    /// when the cursor crosses their edge.
-    var isDragging: Bool { DragActivity.shared.isActive }
-
-    /// Records which app the user picked up. The drag always begins under that tile,
-    /// so the first tile to report itself is the one being carried.
-    func beginAppDrag(path: String) {
+    /// Records which app the user picked up, and from which block. The drag always begins
+    /// under that tile, so the first tile to report itself is the one being carried.
+    func beginAppDrag(path: String, from groupID: UUID?) {
         guard DragActivity.shared.sourcePath == nil else { return }
-        DragActivity.shared.begin(path: path)
-    }
-
-    var isReordering: Bool {
-        sectionTargetID != nil || sidebarGroupID != nil
+        DragActivity.shared.begin(path: path, groupID: groupID)
     }
 
     /// Marks the block the cursor is inside.
@@ -249,8 +177,29 @@ final class DragHighlight: ObservableObject {
     func clear() {
         sectionTargetID = nil
         sidebarGroupID = nil
-        quickToolTarget = false
-        // sourcePath lives on DragActivity so tiles can watch it; cleared there.
+    }
+}
+
+/// Geometry of the app grid, needed to slide a tile by exactly one slot.
+///
+/// The numbers come from `ShelfGrid`, which is the same source the `GridItem` array is
+/// built from, so a slide can no longer disagree with what the grid actually laid out.
+final class GridMetrics: ObservableObject {
+    static let shared = GridMetrics()
+
+    @Published private(set) var columnStep: CGFloat = CGFloat(GridGeometry.fallback.columnStep)
+    @Published private(set) var rowStep: CGFloat = CGFloat(GridGeometry.fallback.rowStep)
+    @Published private(set) var columns: Int = GridGeometry.fallback.columns
+
+    /// Ignores a zero-sized measurement rather than collapsing every slide to zero.
+    func update(width: CGFloat, height: CGFloat, count: Int) {
+        guard let measured = ShelfGrid.spec.measure(width: Double(width),
+                                                    height: Double(height),
+                                                    count: count) else { return }
+        if columns != measured.columns { columns = measured.columns }
+        // Half a point of tolerance: sub-pixel layout jitter should not republish.
+        if abs(columnStep - CGFloat(measured.columnStep)) > 0.5 { columnStep = CGFloat(measured.columnStep) }
+        if abs(rowStep - CGFloat(measured.rowStep)) > 0.5 { rowStep = CGFloat(measured.rowStep) }
     }
 }
 
@@ -261,25 +210,22 @@ final class DragHighlight: ObservableObject {
 final class DropAnimator: ObservableObject {
     static let shared = DropAnimator()
 
-    /// Where the drop happened. The two destinations animate differently on purpose:
-    /// the grid pops the card in where it now sits, the sidebar swallows the icon.
-    enum Target {
-        case grid
-        case sidebar
-    }
-
     /// Bumped on every drop so the destination can replay the animation.
-    @Published var token = 0
-    @Published var target: Target = .grid
-    @Published var groupID: UUID?
-    /// Icon shown shrinking into a sidebar row.
-    @Published var path: String?
+    @Published private(set) var token = 0
+    /// `nil` when the landing block is the ungrouped one, which has no identity of its own.
+    @Published private(set) var groupID: UUID?
+    /// Icon shown shrinking into a sidebar row; `nil` means pulse the row itself.
+    @Published private(set) var path: String?
     /// Card that should pop into place inside the grid.
-    @Published var landedPath: String?
+    @Published private(set) var landedPath: String?
+    /// Where the drop happened. The two destinations animate differently on purpose: the
+    /// grid pops the card in where it now sits, the sidebar swallows the icon.
+    @Published private(set) var isSidebarTarget = false
 
     /// An app dropped inside the page: it appears where it now belongs.
-    func playGrid(groupID: UUID, path: String) {
-        target = .grid
+    /// `groupID` is nil for the ungrouped block.
+    func playGrid(groupID: UUID?, path: String) {
+        isSidebarTarget = false
         self.groupID = groupID
         self.path = nil
         landedPath = path
@@ -288,75 +234,85 @@ final class DropAnimator: ObservableObject {
 
     /// An app dropped on a sidebar group: the icon shrinks into that row.
     func playSidebar(groupID: UUID, path: String) {
-        target = .sidebar
+        isSidebarTarget = true
         self.groupID = groupID
         self.path = path
         landedPath = nil
         token += 1
     }
 
+    /// A generic pulse on a sidebar row, used when there is no icon to shrink.
     func play(groupID: UUID) {
-        target = .sidebar
+        isSidebarTarget = true
         self.groupID = groupID
         path = nil
         landedPath = nil
         token += 1
     }
 
-    func finish() {
+    /// Clears the animation only if it is still the one `token` started.
+    ///
+    /// Two drops inside one animation window used to have the first one's timer tear down
+    /// the second one's animation halfway through.
+    func finish(token: Int) {
+        guard token == self.token else { return }
         groupID = nil
         path = nil
         landedPath = nil
     }
 }
 
-/// Shrinking ghost of the dropped app, shown on the sidebar group that received it.
-private struct DropPulse: View {
-    @ObservedObject private var animator = DropAnimator.shared
-    let groupID: UUID
-
-    @State private var scale: CGFloat = 1
-    @State private var opacity: Double = 0
-
-    var body: some View {
-        ZStack {
-            if animator.target == .sidebar && animator.groupID == groupID {
-                Group {
-                    if let path = animator.path {
-                        Image(nsImage: IconCache.shared.image(for: path))
-                            .resizable()
-                            .interpolation(.high)
-                    } else {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(AppShelfPalette.accent.opacity(0.35))
-                    }
-                }
-                .frame(width: 62, height: 62)
-                .scaleEffect(scale)
-                .opacity(opacity)
-                .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
-                .onAppear(perform: play)
-                .onChange(of: animator.token, initial: false) { _, _ in play() }
-            }
-        }
-        .allowsHitTesting(false)
-    }
-
-    private func play() {
-        scale = 1.1
-        opacity = 1
-        withAnimation(.easeOut(duration: 0.34)) {
-            scale = 0.22
-            opacity = 0
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
-            animator.finish()
-        }
+private extension View {
+    /// Applies `transform` only when `condition` holds, without forcing both branches
+    /// into one type.
+    @ViewBuilder func when<Content: View>(_ condition: Bool, _ transform: (Self) -> Content) -> some View {
+        if condition { transform(self) } else { self }
     }
 }
 
+/// Reports the grid's own size without taking part in layout.
+private struct GridSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
+}
+
+/// Animation presets that step aside when the user asked macOS to reduce motion.
+///
+/// The drag affordances stay — they carry information — but the springs collapse to a
+/// near-instant transition instead of throwing tiles across the grid. SwiftUI has no
+/// `reduceMotion` environment key on macOS, so this reads the same system setting AppKit
+/// exposes; it changes rarely, which makes reading it per render cheap enough.
+enum ShelfMotion {
+    private static var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    static var slide: Animation {
+        reduceMotion ? .linear(duration: 0.08) : .interactiveSpring(response: 0.26, dampingFraction: 0.86)
+    }
+
+    static var pop: Animation {
+        reduceMotion ? .linear(duration: 0.12) : .spring(response: 0.3, dampingFraction: 0.62)
+    }
+
+    static var fade: Animation {
+        reduceMotion ? .linear(duration: 0.08) : .easeOut(duration: 0.16)
+    }
+
+    /// Duration of the sidebar drop pulse, shortened under reduce motion.
+    static var pulseDuration: Double { reduceMotion ? 0.12 : 0.38 }
+    static var pulseAnimation: Animation {
+        reduceMotion ? .linear(duration: 0.1) : .easeOut(duration: 0.34)
+    }
+}
+
+// MARK: - Drag payload
+
 /// What is being dragged: an app card, a group, or a quick tool tile.
-private struct ShelfDragItem: Codable, Transferable {
+struct ShelfDragItem: Codable, Transferable {
     enum Kind: String, Codable {
         case app
         case group
@@ -388,7 +344,7 @@ private struct ShelfDragItem: Codable, Transferable {
     }
 
     var isAppPath: Bool {
-        kind == .app && value.hasSuffix(".app")
+        kind == .app && ShelfPath.isApplicationBundle(value)
     }
 }
 
@@ -428,11 +384,12 @@ private struct GroupDragPreview: View {
             }
         }
         .padding(10)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.96), in: RoundedRectangle(cornerRadius: 10))
+        .background(AppShelfPalette.canvas.opacity(0.96), in: RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(tint.opacity(0.65), lineWidth: 1.5)
         }
+        .accessibilityHidden(true)
     }
 }
 
@@ -445,6 +402,8 @@ private struct AppSection: Identifiable {
     let groupID: UUID?
     let apps: [AppItem]
 }
+
+// MARK: - Main window
 
 /// The main window. Sheets and alerts are kept here so child views only emit user intent.
 struct ContentView: View {
@@ -462,6 +421,8 @@ struct ContentView: View {
     @State private var appToMove: AppItem?
     /// Refresh walks the whole file system, so it asks before starting.
     @State private var showRefreshConfirm = false
+    /// Card the keyboard has selected, by bundle path so it survives section boundaries.
+    @State private var focusedPath: String?
 
     // Running state and memory are cheap to refresh, and a short interval keeps the
     // memory readouts on the cards close to live.
@@ -536,6 +497,10 @@ struct ContentView: View {
         } message: {
             Text(store.errorMessage ?? L10n.shared.t("请稍后重试。"))
         }
+        // Menu commands reach the window's own focus state through this token.
+        .onReceive(FocusRouter.shared.$searchFocusToken) { _ in
+            isSearchFocused = true
+        }
     }
 
     private var mainContent: some View {
@@ -547,38 +512,45 @@ struct ContentView: View {
 
             Divider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    if shouldShowQuickTools {
-                        quickToolsSection
-                    }
+            ScrollViewReader { scroller in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        if shouldShowQuickTools {
+                            quickToolsSection
+                        }
 
-                    if store.isLoading {
-                        LoadingState()
-                    } else if !appSections.isEmpty {
-                        sectionedApps
-                    } else if store.filteredApps.isEmpty {
-                        EmptyState(
-                            query: store.query,
-                            selection: store.selection,
-                            onClearSearch: { store.query = "" },
-                            onAddApp: chooseApps
-                        )
-                    } else {
-                        appGrid
+                        if store.isLoading {
+                            LoadingState()
+                        } else if !appSections.isEmpty {
+                            sectionedApps
+                        } else if store.filteredApps.isEmpty {
+                            EmptyState(
+                                query: store.query,
+                                selection: store.selection,
+                                onClearSearch: { store.query = "" },
+                                onAddApp: chooseApps,
+                                onRevealAll: store.hidden.isEmpty ? nil : { store.revealAllHidden() }
+                            )
+                        } else {
+                            appGrid
+                        }
+                    }
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 24)
+                    .frame(maxWidth: .infinity, minHeight: 320, alignment: .topLeading)
+                    // Dropping a quick tool anywhere in the content area removes it.
+                    .dropDestination(for: ShelfDragItem.self) { items, _ in
+                        removeQuickTools(items)
                     }
                 }
-                .padding(.horizontal, 28)
-                .padding(.vertical, 24)
-                .frame(maxWidth: .infinity, minHeight: 320, alignment: .topLeading)
-                // Dropping a quick tool anywhere in the content area removes it.
-                .dropDestination(for: ShelfDragItem.self) { items, _ in
-                    let removed = items.filter { $0.kind == .quickTool }
-                    guard !removed.isEmpty else { return false }
-                    removed.forEach { quickTools.remove($0.value) }
-                    store.note(L10n.shared.t("已从快捷工具移除"))
-                    return true
-                } isTargeted: { _ in }
+                // An arrow-key selection has to stay on screen, or the highlight walks out
+                // of sight and the list looks frozen.
+                .onChange(of: focusedPath) { _, path in
+                    guard let path else { return }
+                    withAnimation(ShelfMotion.fade) {
+                        scroller.scrollTo(path, anchor: .center)
+                    }
+                }
             }
 
             footer
@@ -590,12 +562,18 @@ struct ContentView: View {
             // A drag cannot survive a page change, so drop any leftover state here too:
             // otherwise the strips and outlines reappear on the new page.
             DragActivity.shared.end()
+            focusedPath = nil
             focusSearchField()
         }
         // Same for the search field itself: leaving a query can strand a drag started
         // over the old results.
         .onChange(of: store.query, initial: false) { _, _ in
             DragActivity.shared.end()
+            // Start the highlight on the best match so Return opens it immediately.
+            focusedPath = currentOrder.first
+        }
+        .onChange(of: store.apps.count, initial: false) { _, _ in
+            if let focusedPath, !currentOrder.contains(focusedPath) { self.focusedPath = nil }
         }
     }
 
@@ -605,11 +583,33 @@ struct ContentView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
 
             TextField(L10n.shared.t("搜索应用，支持拼音首字母，如 wx / vsc"), text: $store.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .focused($isSearchFocused)
+                .accessibilityLabel(L10n.shared.t("搜索应用，支持拼音首字母，如 wx / vsc"))
+                // The search field keeps keyboard focus by design, so grid navigation has to
+                // be driven from here. Up and down walk the results; left and right are left
+                // to the caret, which is what Spotlight does too.
+                .onKeyPress(.upArrow) {
+                    moveFocus(by: -GridMetrics.shared.columns)
+                    return .handled
+                }
+                .onKeyPress(.downArrow) {
+                    moveFocus(by: GridMetrics.shared.columns)
+                    return .handled
+                }
+                .onKeyPress(.return) {
+                    openFocused()
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    guard focusedPath != nil, store.query.isEmpty else { return .ignored }
+                    focusedPath = nil
+                    return .handled
+                }
 
             if !store.query.isEmpty {
                 Button {
@@ -619,6 +619,7 @@ struct ContentView: View {
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(L10n.shared.t("清除搜索"))
                 .help(L10n.shared.t("清除搜索"))
             }
         }
@@ -627,10 +628,11 @@ struct ContentView: View {
         .background(AppShelfPalette.panel, in: RoundedRectangle(cornerRadius: 9))
         .overlay {
             RoundedRectangle(cornerRadius: 9)
-                .stroke(isSearchFocused ? AppShelfPalette.accent.opacity(0.5) : AppShelfPalette.border, lineWidth: 1)
+                .stroke(isSearchFocused ? AppShelfPalette.focusRing : AppShelfPalette.border, lineWidth: 1)
         }
         .padding(.horizontal, 28)
         .padding(.bottom, 16)
+        .accessibilityElement(children: .contain)
     }
 
     private func focusSearchField() {
@@ -638,6 +640,36 @@ struct ContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             isSearchFocused = true
         }
+    }
+
+    // MARK: Keyboard selection
+
+    /// The cards in the order they are drawn, so the arrow keys have something to walk.
+    private var currentOrder: [String] {
+        let sections = appSections
+        if !sections.isEmpty { return sections.flatMap(\.apps).map(\.path) }
+        return store.filteredApps.map(\.path)
+    }
+
+    private func moveFocus(by delta: Int) {
+        let order = currentOrder
+        guard !order.isEmpty else { return }
+        guard let current = focusedPath.flatMap({ order.firstIndex(of: $0) }) else {
+            focusedPath = order.first
+            return
+        }
+        // Clamped rather than wrapped: in a grid, jumping to the far end of a 135-app list
+        // on one keypress reads as a glitch, not as a cycle.
+        let next = min(max(current + delta, 0), order.count - 1)
+        focusedPath = order[next]
+    }
+
+    private func openFocused() {
+        let order = currentOrder
+        guard !order.isEmpty else { return }
+        let path = focusedPath ?? order[0]
+        guard let app = store.apps.first(where: { $0.path == path }) else { return }
+        store.launch(app)
     }
 
     private var header: some View {
@@ -648,6 +680,7 @@ struct ContentView: View {
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(AppShelfPalette.accent)
                         .frame(width: 23)
+                        .accessibilityHidden(true)
 
                     Text(store.selectedTitle)
                         .font(.system(size: 24, weight: .semibold, design: .rounded))
@@ -677,11 +710,13 @@ struct ContentView: View {
             Button {
                 showRefreshConfirm = true
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Image(systemName: store.isScanning ? "hourglass" : "arrow.clockwise")
                     .font(.system(size: 14, weight: .semibold))
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
+            .disabled(store.isScanning)
+            .accessibilityLabel(L10n.shared.t("刷新应用列表"))
             .help(L10n.shared.t("刷新应用列表"))
             .alert(L10n.shared.t("refresh.title"), isPresented: $showRefreshConfirm) {
                 Button(L10n.shared.t("刷新应用列表")) { store.reload() }
@@ -724,6 +759,7 @@ struct ContentView: View {
             .menuStyle(.borderlessButton)
             .buttonStyle(.bordered)
             .controlSize(.large)
+            .accessibilityLabel(L10n.shared.t("appearance"))
             .help(L10n.shared.t("appearance"))
 
             // Language switch: pick a bundled or external language.
@@ -751,14 +787,16 @@ struct ContentView: View {
             .menuStyle(.borderlessButton)
             .buttonStyle(.bordered)
             .controlSize(.large)
+            .accessibilityLabel(L10n.shared.t("language"))
             .help(L10n.shared.t("language"))
 
-            Button(action: openSystemSettings) {
+            Button(action: { SettingsWindowController.shared.showWindow() }) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 14, weight: .semibold))
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
+            .accessibilityLabel(L10n.shared.t("设置"))
             .help(L10n.shared.t("设置"))
         }
         .padding(.horizontal, 28)
@@ -767,17 +805,19 @@ struct ContentView: View {
 
     private var appGrid: some View {
         let membership = store.groupMembership()
+        let apps = store.filteredApps
+        let hiddenSelection = store.selection == .hidden
 
         // Adaptive columns use the available window width without changing tile sizes.
-        return LazyVGrid(columns: appGridColumns, alignment: .leading, spacing: 16) {
-            ForEach(Array(store.filteredApps.enumerated()), id: \.element.id) { index, app in
-                appCard(app, index: index, sectionGroupID: nil, removableGroups: membership[app.path] ?? [])
+        return LazyVGrid(columns: ShelfGrid.columns, alignment: .leading,
+                         spacing: ShelfGrid.rowSpacing) {
+            ForEach(Array(apps.enumerated()), id: \.element.id) { index, app in
+                appCard(app, index: index, sectionGroupID: nil,
+                        removableGroups: membership[app.path] ?? [],
+                        isHiddenApp: hiddenSelection)
+                    .id(app.path)
             }
         }
-    }
-
-    private var appGridColumns: [GridItem] {
-        [GridItem(.adaptive(minimum: 136, maximum: 176), spacing: 14)]
     }
 
     /// All Apps is laid out as one block per group, in the order the user arranged them.
@@ -785,9 +825,10 @@ struct ContentView: View {
     /// cursor is filled, so the drop target is obvious without reading any hint text.
     private var sectionedApps: some View {
         let membership = store.groupMembership()
+        let sections = appSections
 
         return VStack(alignment: .leading, spacing: 18) {
-            ForEach(appSections) { section in
+            ForEach(sections) { section in
                 sectionBlock(section, membership: membership)
             }
         }
@@ -798,9 +839,12 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             sectionHeader(section)
 
-            LazyVGrid(columns: appGridColumns, alignment: .leading, spacing: 16) {
+            LazyVGrid(columns: ShelfGrid.columns, alignment: .leading,
+                      spacing: ShelfGrid.rowSpacing) {
                 ForEach(Array(section.apps.enumerated()), id: \.element.id) { index, app in
-                    appCard(app, index: index, sectionGroupID: section.groupID, removableGroups: membership[app.path] ?? [])
+                    appCard(app, index: index, sectionGroupID: section.groupID,
+                            removableGroups: membership[app.path] ?? [])
+                        .id(app.path)
                 }
             }
             // Measures the block so a tile can be slid by exactly one slot. Sits in the
@@ -814,22 +858,26 @@ struct ContentView: View {
                 GridMetrics.shared.update(width: size.width, height: size.height, count: section.apps.count)
             }
 
-            // Sits below the cards (outside the grid) and stays in the layout so it
-            // never overlaps a tile. Its frame is reserved whether or not a drag is
-            // active, so it does not push the section around when it appears mid-drag.
+            // Sits below the cards (outside the grid) so it never overlaps a tile, and only
+            // exists while a drag is in flight so it costs no space when idle.
             if let groupID = section.groupID {
                 RemoveFromGroupStrip(
                     groupID: groupID,
                     onRemove: { paths in
+                        store.recordUndoPoint()
                         paths.forEach { store.removeApp($0, from: groupID) }
-                        // The app reappears in the ungrouped section, so pop it in there.
+                        // The card reappears in the ungrouped block, so that is where the
+                        // landing animation belongs — not in the block it just left.
                         if let path = paths.first {
-                            DropAnimator.shared.playGrid(groupID: groupID, path: path)
+                            DropAnimator.shared.playGrid(groupID: nil, path: path)
                         }
                         highlight.endDrag()
                     },
                     onMoveGroup: { dragged in
                         store.moveGroup(dragged, before: groupID)
+                        // Without this the strip stayed up until the release fallback
+                        // happened to close it 0.35 s later.
+                        highlight.endDrag()
                     }
                 )
             }
@@ -862,6 +910,15 @@ struct ContentView: View {
             highlight.setGroupHover(isTargeted ? section.groupID : nil)
             highlight.setHover(isTargeted)
         }
+        // An application bundle dragged in from Finder files itself into this group.
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let groupID = section.groupID else { return false }
+            let bundles = urls.filter { ShelfPath.isApplicationBundle($0.path) }
+            guard !bundles.isEmpty else { return false }
+            store.recordUndoPoint()
+            store.addApps(bundles, to: groupID)
+            return true
+        }
     }
 
     /// The short hint next to a section heading, kept separate for the same reason.
@@ -873,9 +930,7 @@ struct ContentView: View {
         var body: some View {
             Text(isTarget ? L10n.shared.t("放到这里") : L10n.shared.t("拖动标题或卡片可调整顺序"))
                 .font(.system(size: 10))
-                .foregroundStyle(
-                    isTarget ? AppShelfPalette.accent : Color.secondary.opacity(0.7)
-                )
+                .foregroundStyle(isTarget ? AppShelfPalette.accent : Color.secondary.opacity(0.7))
         }
 
         private var isTarget: Bool {
@@ -911,7 +966,7 @@ struct ContentView: View {
         }
 
         private var fill: Color {
-            if isTarget { return AppShelfPalette.accent.opacity(0.13) }
+            if isTarget { return AppShelfPalette.dropTargetFill }
             return activity.isActive ? Color.primary.opacity(0.05) : Color.clear
         }
 
@@ -921,17 +976,15 @@ struct ContentView: View {
         }
     }
 
-
-
-
     /// Section headings are themselves draggable, so groups can be reordered here too.
     @ViewBuilder
     private func sectionHeader(_ section: AppSection) -> some View {
-        let header = HStack(spacing: 8) {
+        let heading = HStack(spacing: 8) {
             Image(systemName: section.symbol)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(section.tint)
                 .frame(width: 16)
+                .accessibilityHidden(true)
 
             Text(section.title)
                 .font(.system(size: 14, weight: .semibold))
@@ -951,7 +1004,9 @@ struct ContentView: View {
         .contentShape(Rectangle())
 
         if let groupID = section.groupID {
-            header
+            heading
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(L10n.shared.t("分组") + " " + section.title)
                 .draggable(ShelfDragItem.group(groupID)) {
                     GroupDragPreview(
                         title: section.title,
@@ -961,7 +1016,7 @@ struct ContentView: View {
                     )
                 }
         } else {
-            header
+            heading
         }
     }
 
@@ -971,21 +1026,33 @@ struct ContentView: View {
     /// Cards outside a section carry no drop target at all: hundreds of registered
     /// drop targets slow every mouse move during a drag.
     @ViewBuilder
-    private func appCard(_ app: AppItem, index: Int, sectionGroupID: UUID?, removableGroups: [AppGroup]) -> some View {
+    private func appCard(_ app: AppItem,
+                         index: Int,
+                         sectionGroupID: UUID?,
+                         removableGroups: [AppGroup],
+                         isHiddenApp: Bool = false) -> some View {
         let card = AppCard(
             app: app,
-            currentGroupID: currentGroupID,
             showsCategory: sectionGroupID == nil,
             removableGroups: removableGroups,
+            isFocused: focusedPath == app.path,
+            isHiddenApp: isHiddenApp,
             onOpen: { store.launch(app) },
-            onMove: {
-                appToMove = app
-            },
+            onMove: { appToMove = app },
             onRemoveFromGroup: { group in
+                store.recordUndoPoint()
                 store.removeApp(app, from: group.id)
                 DropAnimator.shared.play(groupID: group.id)
             },
+            onRemoveAllGroups: {
+                store.recordUndoPoint()
+                removableGroups.forEach { store.removeApp(app, from: $0.id) }
+            },
+            onHide: { store.hideApp(app) },
+            onReveal: { store.revealApp(app) },
             onShowInFinder: { store.openInFinder(app) },
+            onShowPackageContents: { store.showPackageContents(app) },
+            onCopyBundleID: { store.copyBundleIdentifier(app) },
             onQuit: app.isRunning ? { store.terminate(app) } : nil,
             onForceQuit: app.isRunning ? { store.terminate(app, force: true) } : nil,
             index: index,
@@ -994,10 +1061,10 @@ struct ContentView: View {
         // The bundle path is the drag payload: dropping on a sidebar group files the app,
         // dropping on another card inside a section reorders it.
         //
-        // Search results are not draggable: they are ranked, so there is no stable
-        // position to reorder, and starting a drag there and abandoning it was the most
-        // reliable way to leave the whole grid stuck showing drag affordances.
-        .when(store.query.isEmpty) { view in
+        // Search results and the hidden list are not draggable: results are ranked, so there
+        // is no stable position to reorder, and starting a drag there and abandoning it was
+        // the most reliable way to leave the whole grid stuck showing drag affordances.
+        .when(store.query.isEmpty && !isHiddenApp) { view in
             view.draggable(ShelfDragItem.app(app.path)) {
                 // The whole card follows the cursor, so there is no icon drifting away
                 // from the tile it belongs to.
@@ -1005,24 +1072,20 @@ struct ContentView: View {
                     .background(AppShelfPalette.panel, in: RoundedRectangle(cornerRadius: 12))
                     .overlay {
                         RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                            .strokeBorder(AppShelfPalette.dragOutline, lineWidth: 1)
                     }
                     // The preview is only built once the drag actually starts, so this is
-                    // the earliest reliable "this app is the one being carried" signal.
-                    // Knowing it before any hover keeps a drag from another block from
-                    // being mistaken for a reorder inside this one.
-                    .onAppear { highlight.beginAppDrag(path: app.path) }
+                    // the earliest reliable "this app is the one being carried" signal, and
+                    // it records which block it came from.
+                    .onAppear { highlight.beginAppDrag(path: app.path, from: sectionGroupID) }
             }
         }
 
         if let sectionGroupID {
             card
                 .dropDestination(for: ShelfDragItem.self) { items, _ in
-                    // A quick tool dropped anywhere outside its row is removed.
-                    if let tool = items.first(where: { $0.kind == .quickTool }) {
-                        quickTools.remove(tool.value)
-                        store.note(L10n.shared.t("已从快捷工具移除"))
-                        return true
+                    if items.contains(where: { $0.kind == .quickTool }) {
+                        return removeQuickTools(items)
                     }
 
                     // Dropping another group on a card reorders that group ahead of this one.
@@ -1041,7 +1104,6 @@ struct ContentView: View {
                     if let path = paths.first {
                         DropAnimator.shared.playGrid(groupID: sectionGroupID, path: path)
                     }
-                    store.persistGroups()
                     highlight.endDrag()
                     return true
                 } isTargeted: { isTargeted in
@@ -1050,59 +1112,78 @@ struct ContentView: View {
                     // section blinked off every time the pointer crossed a tile.
                     highlight.setGroupHover(isTargeted ? sectionGroupID : nil)
                     guard isTargeted else { return }
+                    let activity = DragActivity.shared
                     // Only a reorder inside this block slides anything. When the tile
                     // under the cursor is the one being carried, it is a reorder; when it
                     // is any other tile, the app came from outside and is just filed here.
-                    if app.path == highlight.sourcePath {
+                    if app.path == activity.sourcePath {
                         if DragReflow.shared.sourceIndex == nil {
                             DragReflow.shared.begin(groupID: sectionGroupID, sourceIndex: index)
                         }
-                    } else if highlight.sourcePath == nil {
+                    } else if activity.sourcePath == nil {
                         // Fallback: no drag-start signal arrived, so the first tile to
                         // report itself is assumed to be the one picked up.
-                        highlight.beginAppDrag(path: app.path)
+                        highlight.beginAppDrag(path: app.path, from: sectionGroupID)
                         DragReflow.shared.begin(groupID: sectionGroupID, sourceIndex: index)
                     }
                     // Only records which slot the pointer is over. Nothing is reordered
                     // yet, so the indices used for the slide cannot drift mid-gesture.
                     DragReflow.shared.hover(index, groupID: sectionGroupID)
                 }
+                // Finder bundles dropped on a tile join this group.
+                .dropDestination(for: URL.self) { urls, _ in
+                    let bundles = urls.filter { ShelfPath.isApplicationBundle($0.path) }
+                    guard !bundles.isEmpty else { return false }
+                    store.recordUndoPoint()
+                    store.addApps(bundles, to: sectionGroupID)
+                    return true
+                }
         } else {
             card
         }
     }
 
+    /// Takes any quick tools out of the row. Returns true when that is what this drop was
+    /// about, so the caller stops rather than falling through as an app drop.
+    private func removeQuickTools(_ items: [ShelfDragItem]) -> Bool {
+        let removed = items.filter { $0.kind == .quickTool }
+        guard !removed.isEmpty else { return false }
+        store.recordUndoPoint()
+        removed.forEach { quickTools.remove($0.value) }
+        store.note(L10n.shared.t("已从快捷工具移除"))
+        return true
+    }
+
     /// Writes the arrangement the slide has been previewing, once, on drop.
     ///
-    /// Indices come from the untouched list the whole gesture ran against, so the app
-    /// lands in the slot the gap was sitting in. Removing the app and inserting at the
-    /// hovered index is exactly what the slide showed.
+    /// `ShelfOrdering` owns the arithmetic; this only assembles its inputs from the live
+    /// drag state and hands the resulting placement to the store.
     private func commitOrder(for paths: [String], hovered: AppItem, in groupID: UUID) {
         // Must be the same list the slide indices came from: the grid shows the
         // running-only subset when that filter is on, and mixing the two is what made
         // the landing slot drift a tile.
         let ordered = store.orderedApps(in: groupID)
         let list = store.runningOnly ? ordered.filter(\.isRunning) : ordered
+        let order = list.map(\.path)
 
-        guard let sourcePath = highlight.sourcePath,
-              let source = DragReflow.shared.sourceIndex,
-              let hoveredIndex = DragReflow.shared.hoveredIndex,
-              DragReflow.shared.groupID == groupID,
-              source != hoveredIndex,
-              source < list.count, hoveredIndex < list.count,
-              list[source].path == sourcePath else {
-            // Not a same-group reorder (or nothing moved): file it where it was dropped.
-            store.moveApps(paths, before: hovered, in: groupID)
-            return
-        }
-
-        if hoveredIndex > source {
-            // Lands behind the tile it passed; inserting in front of it is a no-op once
-            // they are neighbours.
-            store.moveApps(paths, after: list[hoveredIndex], in: groupID)
+        let activity = DragActivity.shared
+        let placement: ShelfOrdering.Placement?
+        if DragReflow.shared.groupID == groupID,
+           let source = DragReflow.shared.sourceIndex,
+           let hoveredIndex = DragReflow.shared.hoveredIndex,
+           let picked = activity.sourcePath {
+            placement = ShelfOrdering.placement(order: order, source: source,
+                                                hovered: hoveredIndex, picked: picked)
         } else {
-            store.moveApps(paths, before: list[hoveredIndex], in: groupID)
+            placement = nil
         }
+
+        // `nil` means this was not a same-group reorder, so the app is simply filed where
+        // it was dropped.
+        store.applyOrder(paths,
+                         placement: placement ?? ShelfOrdering.Placement(edge: .before,
+                                                                        target: hovered.path),
+                         in: groupID)
     }
 
     /// Sections are only used when no search text is active; searching ranks across everything.
@@ -1115,19 +1196,24 @@ struct ContentView: View {
         }
 
         switch store.selection {
-        case .running, .ungrouped:
+        case .running, .ungrouped, .hidden:
             return []
         case .group(let id):
             let apps = visible(store.orderedApps(in: id))
             guard !apps.isEmpty, let group = store.groups.first(where: { $0.id == id }) else { return [] }
-            return [AppSection(id: id.uuidString, title: group.name, symbol: group.symbol, tint: group.color, groupID: id, apps: apps)]
+            return [AppSection(id: id.uuidString,
+                               title: store.title(for: group),
+                               symbol: group.symbol,
+                               tint: group.color,
+                               groupID: id,
+                               apps: apps)]
         case .all:
             var sections: [AppSection] = store.groups.compactMap { group in
                 let apps = visible(store.orderedApps(in: group.id))
                 guard !apps.isEmpty else { return nil }
                 return AppSection(
                     id: group.id.uuidString,
-                    title: group.name,
+                    title: store.title(for: group),
                     symbol: group.symbol,
                     tint: group.color,
                     groupID: group.id,
@@ -1137,7 +1223,8 @@ struct ContentView: View {
             let ungrouped = visible(store.ungroupedApps())
             if !ungrouped.isEmpty {
                 sections.append(
-                    AppSection(id: "ungrouped", title: L10n.shared.t("未分组"), symbol: "tray", tint: .secondary, groupID: nil, apps: ungrouped)
+                    AppSection(id: "ungrouped", title: L10n.shared.t("未分组"), symbol: "tray",
+                               tint: .secondary, groupID: nil, apps: ungrouped)
                 )
             }
             return sections
@@ -1162,8 +1249,10 @@ struct ContentView: View {
                 Circle()
                     .fill(store.isLoading ? Color.orange : AppShelfPalette.success)
                     .frame(width: 7, height: 7)
+                    .accessibilityHidden(true)
 
-                Text(store.isLoading ? L10n.shared.t("正在扫描应用…") : L10n.shared.t("apps_scanned", args: ["count": "\(store.apps.count)"]))
+                Text(store.isLoading ? L10n.shared.t("正在扫描应用…")
+                                      : L10n.shared.t("apps_scanned", args: ["count": "\(store.visibleApps.count)"]))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
 
@@ -1184,6 +1273,18 @@ struct ContentView: View {
 
                 Spacer()
 
+                if store.canUndo {
+                    Button {
+                        store.undo()
+                    } label: {
+                        Label(L10n.shared.t("撤销"), systemImage: "arrow.uturn.backward")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(L10n.shared.t("撤销上一步分组或排序操作"))
+                    .help(L10n.shared.t("撤销上一步分组或排序操作"))
+                }
+
                 L10nText("应用架")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(.tertiary)
@@ -1191,6 +1292,7 @@ struct ContentView: View {
             .padding(.horizontal, 28)
             .padding(.vertical, 10)
             .background(AppShelfPalette.sidebar.opacity(0.58))
+            .accessibilityElement(children: .contain)
         }
     }
 
@@ -1199,7 +1301,9 @@ struct ContentView: View {
     }
 
     private var shouldShowQuickTools: Bool {
-        store.selection == .all && store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !store.runningOnly
+        store.selection == .all
+            && store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !store.runningOnly
     }
 
     private var currentGroupID: UUID? {
@@ -1228,11 +1332,9 @@ struct ContentView: View {
         urlsToAdd = panel.urls
         isShowingAddSheet = true
     }
-
-    private func openSystemSettings() {
-        SettingsWindowController.shared.showWindow()
-    }
 }
+
+// MARK: - Sidebar
 
 /// The draggable group list in the sidebar, split out so the sidebar body stays small.
 private struct SidebarGroups: View {
@@ -1254,12 +1356,13 @@ private struct SidebarGroups: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+                .accessibilityLabel(L10n.shared.t("新建分组"))
                 .help(L10n.shared.t("新建分组"))
             }
 
             ForEach(store.groups) { group in
                 SidebarRow(
-                    title: group.name,
+                    title: store.title(for: group),
                     symbol: group.symbol,
                     tint: group.color,
                     count: store.count(for: .group(group.id)),
@@ -1279,7 +1382,7 @@ private struct SidebarGroups: View {
                 // The whole group travels with the cursor, cards included.
                 .draggable(ShelfDragItem.group(group.id)) {
                     GroupDragPreview(
-                        title: group.name,
+                        title: store.title(for: group),
                         symbol: group.symbol,
                         tint: group.color,
                         apps: Array(store.orderedApps(in: group.id).prefix(6))
@@ -1305,6 +1408,14 @@ private struct SidebarGroups: View {
                 } isTargeted: { isTargeted in
                     highlight.sidebarGroupID = isTargeted ? group.id : nil
                     highlight.setHover(isTargeted)
+                }
+                // Finder bundles dropped on the row join this group.
+                .dropDestination(for: URL.self) { urls, _ in
+                    let bundles = urls.filter { ShelfPath.isApplicationBundle($0.path) }
+                    guard !bundles.isEmpty else { return false }
+                    store.recordUndoPoint()
+                    store.addApps(bundles, to: group.id)
+                    return true
                 }
                 // The dropped app shrinks into the row instead of simply vanishing.
                 .overlay { DropPulse(groupID: group.id) }
@@ -1357,6 +1468,18 @@ struct SidebarView: View {
                         ) {
                             store.selection = .ungrouped
                         }
+                        // Only offered once there is something to show.
+                        if !store.hidden.isEmpty {
+                            SidebarRow(
+                                title: L10n.shared.t("已隐藏"),
+                                symbol: "eye.slash.fill",
+                                tint: .secondary,
+                                count: store.count(for: .hidden),
+                                isSelected: store.selection == .hidden
+                            ) {
+                                store.selection = .hidden
+                            }
+                        }
                     }
 
                     SidebarGroups(
@@ -1407,6 +1530,7 @@ struct SidebarView: View {
                     .foregroundStyle(.white)
             }
             .frame(width: 34, height: 34)
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
                 L10nText("应用架")
@@ -1476,6 +1600,7 @@ private struct SidebarRow: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(isSelected ? tint : .secondary)
                     .frame(width: 18)
+                    .accessibilityHidden(true)
 
                 Text(title)
                     .font(.system(size: 13, weight: isHighlighted ? .semibold : .medium))
@@ -1494,6 +1619,9 @@ private struct SidebarRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue("\(count)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var isHighlighted: Bool { isSelected || isDropTarget }
@@ -1528,6 +1656,7 @@ private struct ToolRow: View {
             HStack(spacing: 10) {
                 toolIcon
                     .frame(width: 18)
+                    .accessibilityHidden(true)
                 Text(tool.title)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -1535,12 +1664,15 @@ private struct ToolRow: View {
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 10)
             .frame(height: 30)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(tool.title)
+        .accessibilityHint(L10n.shared.t("打开"))
         .help(L10n.shared.t("打开") + " \(tool.title)")
         .draggable(ShelfDragItem.quickTool(tool.id)) {
             Label(tool.title, systemImage: "square.dashed")
@@ -1564,7 +1696,137 @@ private struct ToolRow: View {
     }
 }
 
-/// A compact app tile. Opening is the primary action; less common actions live in its menu.
+// MARK: - Cards
+
+/// A red strip at the foot of a group block. Dropping an app here takes it out of
+/// the group instead of filing it in, so grouping can be undone by dragging alone.
+private struct RemoveFromGroupStrip: View {
+    @ObservedObject private var activity = DragActivity.shared
+
+    let groupID: UUID
+    let onRemove: ([String]) -> Void
+    let onMoveGroup: (UUID) -> Void
+
+    @State private var isTargeted = false
+    @State private var targetedWork: DispatchWorkItem?
+    private let debounceDelay = 0.22
+    /// Tall enough to drop into casually. Only shown while a drag is in progress, so
+    /// it never occupies space (or overlaps a card) when idle.
+    private let stripHeight: CGFloat = 64
+
+    var body: some View {
+        // Visible for the whole drag; only the fill follows the cursor.
+        let isVisible = activity.isActive || isTargeted
+
+        VStack(spacing: 0) {
+            if isVisible {
+                HStack(spacing: 8) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14, weight: .semibold))
+                        .accessibilityHidden(true)
+                    L10nText("拖到这里，从该分组移除")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .foregroundStyle(isTargeted ? Color.white : AppShelfPalette.danger)
+                .frame(maxWidth: .infinity)
+                .frame(height: stripHeight)
+                .background(
+                    isTargeted ? AppShelfPalette.danger.opacity(0.9) : AppShelfPalette.danger.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 12)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(
+                            AppShelfPalette.danger.opacity(isTargeted ? 1 : 0.5),
+                            style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
+                        )
+                }
+            }
+        }
+        .animation(ShelfMotion.fade, value: isVisible)
+        .allowsHitTesting(isVisible)
+        .dropDestination(for: ShelfDragItem.self) { items, _ in
+            if let dragged = items.first(where: { $0.kind == .group })?.groupID {
+                onMoveGroup(dragged)
+                return true
+            }
+
+            let paths = items.filter(\.isAppPath).map(\.value)
+            guard !paths.isEmpty else { return false }
+            onRemove(paths)
+            return true
+        } isTargeted: { isTargeted in
+            setTargeted(isTargeted)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(L10n.shared.t("拖到这里，从该分组移除"))
+    }
+
+    /// Debounced so a cursor sitting on the edge cannot flip the strip on and off.
+    private func setTargeted(_ value: Bool) {
+        DragHighlight.shared.setHover(value)
+        if value {
+            targetedWork?.cancel()
+            withAnimation(ShelfMotion.fade) { isTargeted = true }
+            return
+        }
+
+        targetedWork?.cancel()
+        let work = DispatchWorkItem {
+            withAnimation(ShelfMotion.fade) { self.isTargeted = false }
+        }
+        targetedWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + debounceDelay, execute: work)
+    }
+}
+
+/// Shrinking ghost of the dropped app, shown on the sidebar group that received it.
+private struct DropPulse: View {
+    @ObservedObject private var animator = DropAnimator.shared
+    let groupID: UUID
+
+    @State private var scale: CGFloat = 1
+    @State private var opacity: Double = 0
+
+    var body: some View {
+        ZStack {
+            if animator.isSidebarTarget, animator.groupID == groupID {
+                Group {
+                    if let path = animator.path {
+                        Image(nsImage: IconCache.shared.image(for: path))
+                            .resizable()
+                            .interpolation(.high)
+                    } else {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(AppShelfPalette.accent.opacity(0.35))
+                    }
+                }
+                .frame(width: 62, height: 62)
+                .scaleEffect(scale)
+                .opacity(opacity)
+                .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                .onAppear(perform: play)
+                .onChange(of: animator.token, initial: false) { _, _ in play() }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func play() {
+        let token = animator.token
+        scale = 1.1
+        opacity = 1
+        withAnimation(ShelfMotion.pulseAnimation) {
+            scale = 0.22
+            opacity = 0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + ShelfMotion.pulseDuration) {
+            animator.finish(token: token)
+        }
+    }
+}
+
 /// Category, disk usage, and memory share one small line. The category is only
 /// repeated when the tile is not already sitting inside that group's section.
 ///
@@ -1604,6 +1866,7 @@ private struct AppUsageLine: View {
         }
         .font(.system(size: 10.5, weight: .medium, design: .rounded))
         .lineLimit(1)
+        .accessibilityHidden(true)
         .help(L10n.shared.t("应用占用 = 应用本体 + 该应用在 Library 中的数据；内存为运行中全部进程之和"))
     }
 }
@@ -1612,7 +1875,7 @@ private struct AppUsageLine: View {
 ///
 /// The grid and the drag preview both render this, so what follows the cursor is the
 /// whole card the user picked up rather than a bare icon drifting away from its tile.
-private struct AppCardTile: View {
+struct AppCardTile: View {
     let app: AppItem
     let showsCategory: Bool
     /// nil fills the grid column; the drag preview passes a concrete width because a
@@ -1625,6 +1888,7 @@ private struct AppCardTile: View {
             ZStack(alignment: .topTrailing) {
                 AppIconView(path: app.path)
                     .frame(width: 84, height: 84)
+                    .accessibilityHidden(true)
 
                 if app.isRunning {
                     Circle()
@@ -1632,9 +1896,10 @@ private struct AppCardTile: View {
                         .frame(width: 11, height: 11)
                         .overlay {
                             Circle()
-                                .strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 2)
+                                .strokeBorder(AppShelfPalette.canvas, lineWidth: 2)
                         }
                         .offset(x: 2, y: -2)
+                        .accessibilityHidden(true)
                 }
             }
 
@@ -1653,7 +1918,7 @@ private struct AppCardTile: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 14)
-        .frame(minHeight: 158, alignment: .top)
+        .frame(minHeight: ShelfGrid.minimumRowHeight, alignment: .top)
 
         if let width {
             tile.frame(width: width, alignment: .top)
@@ -1665,15 +1930,23 @@ private struct AppCardTile: View {
 
 private struct AppCard: View {
     let app: AppItem
-    let currentGroupID: UUID?
     /// False inside a group section, where the heading already says the category.
     let showsCategory: Bool
     /// Groups this app belongs to, offered in the menu so grouping can be undone.
     let removableGroups: [AppGroup]
+    /// Selected by the keyboard: the arrow keys have to show what they moved on to.
+    let isFocused: Bool
+    /// Shown from the hidden list, so the offer flips to 显示此应用.
+    let isHiddenApp: Bool
     let onOpen: () -> Void
     let onMove: () -> Void
     let onRemoveFromGroup: (AppGroup) -> Void
+    let onRemoveAllGroups: () -> Void
+    let onHide: () -> Void
+    let onReveal: () -> Void
     let onShowInFinder: () -> Void
+    let onShowPackageContents: () -> Void
+    let onCopyBundleID: () -> Void
     let onQuit: (() -> Void)?
     let onForceQuit: (() -> Void)?
 
@@ -1695,43 +1968,27 @@ private struct AppCard: View {
     /// True once this exact tile is the one being carried.
     ///
     /// Requires `reflow.sourceIndex` to be set: until then the tile still has to accept
-    /// the hit that tells the grid which app was picked up.
+    /// the hit that tells the grid which app was picked up. It also has to be in the block
+    /// the drag started from — an app that sits in three groups shows three cards, and
+    /// carrying one used to blank all three.
     private var isCarriedAway: Bool {
-        activity.sourcePath == app.path && reflow.sourceIndex != nil
+        activity.sourcePath == app.path
+            && reflow.sourceIndex != nil
+            && activity.sourceGroupID == sectionGroupID
     }
 
     /// How far this tile slides while the dragged tile is carried past it.
-    ///
-    /// Tiles between the picked-up slot and the hovered slot move one slot towards the
-    /// pick-up, which opens a gap exactly where the card will land.
     private var slideOffset: CGSize {
         guard let sectionGroupID,
               reflow.groupID == sectionGroupID,
               let source = reflow.sourceIndex,
               let hovered = reflow.hoveredIndex,
-              index != source else { return .zero }
+              let target = ShelfReflow.targetIndex(index: index, source: source, hovered: hovered)
+        else { return .zero }
 
-        let targetIndex: Int
-        if hovered > source {
-            guard index > source, index <= hovered else { return .zero }
-            targetIndex = index - 1
-        } else if hovered < source {
-            guard index >= hovered, index < source else { return .zero }
-            targetIndex = index + 1
-        } else {
-            return .zero
-        }
-
-        let columns = max(1, grid.columns)
-        let fromColumn = index % columns
-        let fromRow = index / columns
-        let toColumn = targetIndex % columns
-        let toRow = targetIndex / columns
-
-        return CGSize(
-            width: CGFloat(toColumn - fromColumn) * grid.columnStep,
-            height: CGFloat(toRow - fromRow) * grid.rowStep
-        )
+        let delta = ShelfReflow.slotDelta(from: index, to: target, columns: grid.columns)
+        return CGSize(width: CGFloat(delta.columns) * grid.columnStep,
+                      height: CGFloat(delta.rows) * grid.rowStep)
     }
 
     var body: some View {
@@ -1741,14 +1998,18 @@ private struct AppCard: View {
         .buttonStyle(.plain)
         // Pure transform: no relayout, which is what makes the motion continuous.
         .offset(slideOffset)
-        .animation(
-            .interactiveSpring(response: 0.26, dampingFraction: 0.86),
-            value: reflow.hoveredIndex
-        )
+        .animation(ShelfMotion.slide, value: reflow.hoveredIndex)
+        // The carried card leaves its slot; without this the fade is a hard cut.
+        .animation(ShelfMotion.fade, value: isCarriedAway)
         .onHover { isHovering = $0 }
         // Disk usage is only measured once the tile is actually on screen, so scrolling
         // through hundreds of apps never queues work for apps nobody looked at.
         .onAppear { AppMetrics.shared.requestSizeIfNeeded(for: app) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(app.name)
+        .accessibilityValue(accessibilityDetails)
+        .accessibilityHint(L10n.shared.t("打开"))
+        .accessibilityAddTraits(.isButton)
         .contextMenu {
             Button(L10n.shared.t("打开"), systemImage: "arrow.up.right") { onOpen() }
             Button(L10n.shared.t("加入其他分组"), systemImage: "folder.badge.plus") { onMove() }
@@ -1764,7 +2025,7 @@ private struct AppCard: View {
                     if removableGroups.count > 1 {
                         Divider()
                         Button(L10n.shared.t("移出全部分组"), systemImage: "xmark.circle", role: .destructive) {
-                            removableGroups.forEach(onRemoveFromGroup)
+                            onRemoveAllGroups()
                         }
                     }
                 }
@@ -1777,30 +2038,51 @@ private struct AppCard: View {
                     Button(L10n.shared.t("强制结束"), systemImage: "exclamationmark.octagon", role: .destructive) { onForceQuit() }
                 }
             }
+
             Divider()
             Button(L10n.shared.t("在 Finder 中显示"), systemImage: "folder") { onShowInFinder() }
+            Button(L10n.shared.t("显示包内容"), systemImage: "doc.on.doc") { onShowPackageContents() }
+            Button(L10n.shared.t("拷贝 Bundle ID"), systemImage: "doc.on.clipboard") { onCopyBundleID() }
+
+            Divider()
+            if isHiddenApp {
+                Button(L10n.shared.t("显示此应用"), systemImage: "eye") { onReveal() }
+            } else {
+                Button(L10n.shared.t("隐藏此应用"), systemImage: "eye.slash") { onHide() }
+            }
         }
         .help(L10n.shared.t("打开") + " \(app.name)")
     }
 
-    /// Accent round the tile while dragging, so every drop target reads as its own slot.
-    /// A system separator is used rather than a fixed black stroke, which would vanish
-    /// in dark mode.
+    private var accessibilityDetails: String {
+        var parts = [L10n.shared.t(app.category)]
+        if app.isRunning { parts.append(L10n.shared.t("运行中")) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Outline round the tile while dragging. A system separator is used rather than a
+    /// fixed black stroke, which would vanish in dark mode.
     private var dragOutline: some View {
         RoundedRectangle(cornerRadius: 12)
-            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+            .strokeBorder(AppShelfPalette.dragOutline, lineWidth: 1)
     }
 
     /// Launchpad-style tile: a large icon, a centred name, and one quiet info line.
     private var cardContent: some View {
         AppCardTile(app: app, showsCategory: showsCategory)
-            .background(hoverBackground)
+            .background(cardBackground)
         .contentShape(RoundedRectangle(cornerRadius: 12))
         // Every tile shows its bounds while dragging, so where an icon will land is
         // obvious before releasing it.
-        .overlay { if activity.isActive { dragOutline } }
-        // No animated shadow or scale: animating those on two hundred tiles at once is
-        // what made hovering and dragging feel heavy.
+        .overlay {
+            if activity.isActive { dragOutline }
+            if isFocused {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(AppShelfPalette.accent, lineWidth: 2)
+            }
+        }
+        // No animated shadow or scale on hover: animating those on two hundred tiles at
+        // once is what made hovering and dragging feel heavy.
         .scaleEffect(isHovering ? 1.015 : 1)
         // An app dropped inside the page pops up where its card now sits.
         .scaleEffect(popScale)
@@ -1811,29 +2093,32 @@ private struct AppCard: View {
         // the same point, and if the invisible tile won, hovering the gap would read as
         // "hovering the source" and snap every tile back.
         .allowsHitTesting(!isCarriedAway)
-        .onChange(of: animator.token, initial: false) { _, _ in
-            guard animator.target == .grid, animator.landedPath == app.path else { return }
-            popIn()
+        .onChange(of: animator.token, initial: false) { _, token in
+            // Matched on the block too, so a card of the same app sitting in another
+            // group does not pop as well.
+            guard animator.landedPath == app.path,
+                  animator.groupID == sectionGroupID else { return }
+            popIn(token: token)
         }
     }
 
-    private func popIn() {
+    private func popIn(token: Int) {
         popScale = 0.55
         popOpacity = 0.2
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.62)) {
+        withAnimation(ShelfMotion.pop) {
             popScale = 1
             popOpacity = 1
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            animator.finish()
+            animator.finish(token: token)
         }
     }
 
     /// No permanent outline: the tile only gains a soft rounded surface while hovered,
     /// so the grid stays clean and the icon and name carry the layout.
-    private var hoverBackground: some View {
+    private var cardBackground: some View {
         RoundedRectangle(cornerRadius: 12)
-            .fill(isHovering ? AppShelfPalette.panel : Color.clear)
+            .fill(isHovering || isFocused ? AppShelfPalette.panel : Color.clear)
     }
 }
 
@@ -1858,7 +2143,7 @@ final class IconCache {
 }
 
 /// Resolve the icon from the bundle path so third-party apps use their own artwork.
-private struct AppIconView: View {
+struct AppIconView: View {
     let path: String
 
     var body: some View {
@@ -1869,88 +2154,7 @@ private struct AppIconView: View {
     }
 }
 
-/// A red strip at the foot of a group block. Dropping an app here takes it out of
-/// the group instead of filing it in, so grouping can be undone by dragging alone.
-private struct RemoveFromGroupStrip: View {
-    @ObservedObject private var highlight = DragHighlight.shared
-    /// The strip appears for the whole drag, and this flag changes only twice per drag.
-    @ObservedObject private var activity = DragActivity.shared
-
-    let groupID: UUID
-    let onRemove: ([String]) -> Void
-    let onMoveGroup: (UUID) -> Void
-
-    @State private var isTargeted = false
-    private let debounceDelay = 0.22
-    /// Tall enough to drop into casually. Only shown while a drag is in progress, so
-    /// it never occupies space (or overlaps a card) when idle.
-    private let stripHeight: CGFloat = 64
-
-    var body: some View {
-        // Visible for the whole drag; only the fill follows the cursor. The frame is
-        // always reserved (faint hint when idle) so there is no relayout mid-drag.
-        let isVisible = activity.isActive || isTargeted
-
-        VStack(spacing: 0) {
-            if isVisible {
-                HStack(spacing: 8) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 14, weight: .semibold))
-                    L10nText("拖到这里，从该分组移除")
-                        .font(.system(size: 13, weight: .semibold))
-                }
-                .foregroundStyle(isTargeted ? Color.white : Color.red)
-                .frame(maxWidth: .infinity)
-                .frame(height: stripHeight)
-                .background(
-                    isTargeted ? Color.red.opacity(0.9) : Color.red.opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 12)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(
-                            Color.red.opacity(isTargeted ? 1 : 0.5),
-                            style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
-                        )
-                }
-            }
-        }
-        .animation(.easeOut(duration: 0.12), value: isVisible)
-        .allowsHitTesting(isVisible)
-        .dropDestination(for: ShelfDragItem.self) { items, _ in
-            if let dragged = items.first(where: { $0.kind == .group })?.groupID {
-                onMoveGroup(dragged)
-                return true
-            }
-
-            let paths = items.filter(\.isAppPath).map(\.value)
-            guard !paths.isEmpty else { return false }
-            onRemove(paths)
-            return true
-        } isTargeted: { isTargeted in
-            setTargeted(isTargeted)
-        }
-    }
-
-    /// Debounced so a cursor sitting on the edge cannot flip the strip on and off.
-    private func setTargeted(_ value: Bool) {
-        highlight.setHover(value)
-        if value {
-            targetedWork?.cancel()
-            withAnimation(.easeOut(duration: 0.12)) { isTargeted = true }
-            return
-        }
-
-        targetedWork?.cancel()
-        let work = DispatchWorkItem {
-            withAnimation(.easeOut(duration: 0.12)) { self.isTargeted = false }
-        }
-        targetedWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + debounceDelay, execute: work)
-    }
-
-    @State private var targetedWork: DispatchWorkItem?
-}
+// MARK: - Quick tools
 
 /// The quick tool row at the top of All Apps.
 /// Its own view so the drop highlight does not invalidate the whole page.
@@ -1996,18 +2200,27 @@ private struct QuickToolsRow: View {
         }
         // Dropping an app card here pins it as a quick tool.
         .dropDestination(for: ShelfDragItem.self) { items, _ in
-            let paths = items.filter(\.isAppPath).map(\.value)
-            guard !paths.isEmpty else { return false }
-            for path in paths {
-                let name = AppDiscoveryService.item(for: URL(fileURLWithPath: path))?.name
-                    ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-                quickTools.addCustom(name: name, path: path)
-            }
-            onAdded(L10n.shared.t("已加入快捷工具"))
-            return true
+            pin(items.filter(\.isAppPath).map(\.value))
         } isTargeted: { isTargeted in
             self.isTargeted = isTargeted
         }
+        // Bundles dragged in from Finder can be pinned the same way.
+        .dropDestination(for: URL.self) { urls, _ in
+            pin(urls.filter { ShelfPath.isApplicationBundle($0.path) }.map(\.path))
+        }
+    }
+
+    private func pin(_ paths: [String]) -> Bool {
+        let bundles = paths.filter { ShelfPath.isApplicationBundle($0) }
+        guard !bundles.isEmpty else { return false }
+        for path in bundles {
+            let url = URL(fileURLWithPath: path)
+            let name = AppDiscoveryService.item(for: url)?.name
+                ?? url.deletingPathExtension().lastPathComponent
+            quickTools.addCustom(name: name, path: path)
+        }
+        onAdded(L10n.shared.t("已加入快捷工具"))
+        return true
     }
 }
 
@@ -2022,6 +2235,7 @@ private struct QuickToolTile: View {
                 toolIcon
                     .frame(width: 29, height: 29)
                     .background(AppShelfPalette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(tool.title)
@@ -2036,6 +2250,7 @@ private struct QuickToolTile: View {
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 11)
             .frame(maxWidth: .infinity, minHeight: 54, maxHeight: 54)
@@ -2046,6 +2261,8 @@ private struct QuickToolTile: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(tool.title)
+        .accessibilityHint(L10n.shared.t("拖应用进来添加，拖出去移除"))
         .help(L10n.shared.t("打开") + " \(tool.title)")
         // Drag the tile out of the row to remove it.
         .draggable(ShelfDragItem.quickTool(tool.id)) {
@@ -2071,6 +2288,8 @@ private struct QuickToolTile: View {
     }
 }
 
+// MARK: - States
+
 /// Placeholder shown while the file-system scan is in progress.
 private struct LoadingState: View {
     var body: some View {
@@ -2085,25 +2304,27 @@ private struct LoadingState: View {
     }
 }
 
-/// Shared empty state for an empty group and an unsuccessful search.
+/// Shared empty state, worded for whichever view is actually empty.
 private struct EmptyState: View {
     let query: String
     let selection: ShelfSelection
     let onClearSearch: () -> Void
     let onAddApp: () -> Void
+    let onRevealAll: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: query.isEmpty ? "square.grid.2x2" : "magnifyingglass")
+            Image(systemName: symbolName)
                 .font(.system(size: 31, weight: .light))
                 .foregroundStyle(.tertiary)
                 .frame(width: 66, height: 66)
                 .background(AppShelfPalette.panel, in: RoundedRectangle(cornerRadius: 16))
+                .accessibilityHidden(true)
 
-            Text(query.isEmpty ? L10n.shared.t("这个分组还没有应用") : L10n.shared.t("没有匹配的应用"))
+            Text(headline)
                 .font(.system(size: 16, weight: .semibold))
 
-            Text(query.isEmpty ? L10n.shared.t("可以添加一个 .app，或切换到其他分组。") : L10n.shared.t("换个关键词试试。"))
+            Text(subheadline)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
 
@@ -2112,10 +2333,13 @@ private struct EmptyState: View {
                     Button(L10n.shared.t("清除搜索"), action: onClearSearch)
                         .buttonStyle(.bordered)
                 }
-                if selection != .running {
-                    Button {
-                        onAddApp()
-                    } label: {
+                if selection == .hidden, let onRevealAll {
+                    Button(L10n.shared.t("全部显示"), action: onRevealAll)
+                        .buttonStyle(.borderedProminent)
+                        .tint(AppShelfPalette.accent)
+                }
+                if selection != .running && selection != .hidden && selection != .ungrouped {
+                    Button(action: onAddApp) {
                         Label(L10n.shared.t("添加应用"), systemImage: "plus")
                     }
                     .buttonStyle(.borderedProminent)
@@ -2126,7 +2350,39 @@ private struct EmptyState: View {
         }
         .frame(maxWidth: .infinity, minHeight: 300)
     }
+
+    private var symbolName: String {
+        if !query.isEmpty { return "magnifyingglass" }
+        switch selection {
+        case .running: return "bolt.slash"
+        case .hidden: return "eye.slash"
+        case .ungrouped: return "checkmark.seal"
+        default: return "square.grid.2x2"
+        }
+    }
+
+    private var headline: String {
+        if !query.isEmpty { return L10n.shared.t("没有匹配的应用") }
+        switch selection {
+        case .running: return L10n.shared.t("没有正在运行的应用")
+        case .hidden: return L10n.shared.t("没有隐藏的应用")
+        case .ungrouped: return L10n.shared.t("所有应用都已分组")
+        default: return L10n.shared.t("这个分组还没有应用")
+        }
+    }
+
+    private var subheadline: String {
+        if !query.isEmpty { return L10n.shared.t("换个关键词试试。") }
+        switch selection {
+        case .running: return L10n.shared.t("启动任意应用后即可看到。")
+        case .hidden: return L10n.shared.t("隐藏的应用不会出现在列表和搜索结果里。")
+        case .ungrouped: return L10n.shared.t("每个应用都至少在一个分组里。")
+        default: return L10n.shared.t("可以添加一个 .app，或切换到其他分组。")
+        }
+    }
 }
+
+// MARK: - Sheets
 
 /// Create or edit one group without exposing persistence details to the form.
 struct GroupEditorSheet: View {
@@ -2138,12 +2394,10 @@ struct GroupEditorSheet: View {
     @State private var name: String
     @State private var selectedSymbol: String
     @State private var color: Color
+    @State private var symbolFilter = ""
 
-    private let symbols = [
-        "star.fill", "folder.fill", "hammer.fill", "bubble.left.fill", "wand.and.stars",
-        "house.fill", "wrench.and.screwdriver.fill", "book.fill", "music.note", "gamecontroller.fill",
-        "camera.fill", "doc.fill", "network", "globe", "heart.fill"
-    ]
+    private let symbols = GroupSymbolCatalog.available
+    private let columns = 8
 
     init(existing: AppGroup? = nil, onSave: @escaping (String, String, String) -> Void) {
         self.existing = existing
@@ -2171,32 +2425,49 @@ struct GroupEditorSheet: View {
                     .font(.system(size: 12, weight: .semibold))
                 TextField(L10n.shared.t("例如：项目、影音、常用"), text: $name)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel(L10n.shared.t("名称"))
             }
 
             VStack(alignment: .leading, spacing: 9) {
                 L10nText("图标")
                     .font(.system(size: 12, weight: .semibold))
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 8), spacing: 8) {
-                    ForEach(symbols, id: \.self) { symbol in
-                        Button {
-                            selectedSymbol = symbol
-                        } label: {
-                            Image(systemName: symbol)
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(selectedSymbol == symbol ? color : .secondary)
-                                .frame(width: 31, height: 31)
-                                .background {
-                                    RoundedRectangle(cornerRadius: 7)
-                                        .fill(selectedSymbol == symbol ? color.opacity(0.14) : AppShelfPalette.panel)
-                                }
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 7)
-                                        .stroke(selectedSymbol == symbol ? color.opacity(0.55) : AppShelfPalette.border, lineWidth: 1)
-                                }
+
+                // The catalogue is long enough that a fixed grid without a filter was
+                // unusable once the wanted symbol was not among the first fifteen.
+                TextField(L10n.shared.t("搜索图标"), text: $symbolFilter)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .accessibilityLabel(L10n.shared.t("搜索图标"))
+
+                ScrollView {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: columns),
+                              spacing: 8) {
+                        ForEach(shownSymbols, id: \.self) { symbol in
+                            Button {
+                                selectedSymbol = symbol
+                            } label: {
+                                Image(systemName: symbol)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(selectedSymbol == symbol ? color : .secondary)
+                                    .frame(width: 31, height: 31)
+                                    .background {
+                                        RoundedRectangle(cornerRadius: 7)
+                                            .fill(selectedSymbol == symbol ? color.opacity(0.14) : AppShelfPalette.panel)
+                                    }
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 7)
+                                            .stroke(selectedSymbol == symbol ? color.opacity(0.55) : AppShelfPalette.border,
+                                                    lineWidth: 1)
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(symbol)
+                            .accessibilityAddTraits(selectedSymbol == symbol ? .isSelected : [])
                         }
-                        .buttonStyle(.plain)
                     }
+                    .padding(2)
                 }
+                .frame(height: 132)
             }
 
             ColorPicker(L10n.shared.t("颜色"), selection: $color, supportsOpacity: false)
@@ -2216,6 +2487,15 @@ struct GroupEditorSheet: View {
         }
         .padding(24)
         .frame(width: 430)
+    }
+
+    private var shownSymbols: [String] {
+        let query = symbolFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return symbols }
+        // The chosen symbol stays visible while filtering, so the selection never vanishes.
+        let matches = symbols.filter { $0.lowercased().contains(query) }
+        if matches.isEmpty { return [selectedSymbol] }
+        return matches.contains(selectedSymbol) ? matches : [selectedSymbol] + matches
     }
 }
 
@@ -2252,9 +2532,10 @@ struct AddAppsSheet: View {
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(urls, id: \.path) { url in
                         HStack(spacing: 9) {
-                            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                            Image(nsImage: IconCache.shared.image(for: url.path))
                                 .resizable()
                                 .frame(width: 28, height: 28)
+                                .accessibilityHidden(true)
                             Text(url.deletingPathExtension().lastPathComponent)
                                 .font(.system(size: 12, weight: .medium))
                                 .lineLimit(1)
@@ -2315,9 +2596,10 @@ struct MoveAppSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: app.path))
+                Image(nsImage: IconCache.shared.image(for: app.path))
                     .resizable()
                     .frame(width: 44, height: 44)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     L10nText("加入其他分组")
                         .font(.system(size: 18, weight: .semibold, design: .rounded))
@@ -2350,16 +2632,5 @@ struct MoveAppSheet: View {
         }
         .padding(24)
         .frame(width: 380)
-    }
-}
-
-private extension Color {
-    /// Convert the system color picker value to the hex representation persisted by AppGroup.
-    var appShelfHex: String {
-        let nsColor = NSColor(self).usingColorSpace(.deviceRGB) ?? NSColor.gray
-        let red = max(0, min(255, Int(round(nsColor.redComponent * 255))))
-        let green = max(0, min(255, Int(round(nsColor.greenComponent * 255))))
-        let blue = max(0, min(255, Int(round(nsColor.blueComponent * 255))))
-        return String(format: "#%02X%02X%02X", red, green, blue)
     }
 }

@@ -2,28 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 
-/// Human readable byte counts for the app cards.
-enum ByteFormatter {
-    /// Disk usage reads like Finder: "1.2 GB", "256 MB", "512 KB".
-    static func disk(_ bytes: Int64) -> String {
-        guard bytes > 0 else { return "—" }
-        let gigabytes = Double(bytes) / 1_073_741_824
-        if gigabytes >= 1 { return String(format: "%.1f GB", gigabytes) }
-        let megabytes = Double(bytes) / 1_048_576
-        if megabytes >= 1 { return String(format: "%.0f MB", megabytes) }
-        return String(format: "%.0f KB", Double(bytes) / 1024)
-    }
-
-    /// Memory usage is shown in the same shape, e.g. "1.2 G" or "512 M".
-    static func memory(_ bytes: Int64) -> String {
-        guard bytes > 0 else { return "—" }
-        let gigabytes = Double(bytes) / 1_073_741_824
-        if gigabytes >= 1 { return String(format: "%.1f G", gigabytes) }
-        let megabytes = Double(bytes) / 1_048_576
-        if megabytes >= 1 { return String(format: "%.0f M", megabytes) }
-        return String(format: "%.0f K", Double(bytes) / 1024)
-    }
-}
+import AppShelfCore
 
 /// Reads the resident memory of running processes. This is the same source Activity
 /// Monitor uses for its real-memory column, and it needs no entitlement.
@@ -44,16 +23,20 @@ enum ProcessMemory {
     /// One pass over every running process, so a bundle can be charged for all of
     /// its helpers and XPC services instead of only its main process.
     static func snapshot() -> [Sample] {
-        var pids = [Int32](repeating: 0, count: 4096)
-        let count = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<Int32>.stride))
+        // Ask for nothing to learn the real count first: the previous fixed 4096 slot
+        // buffer truncated silently on machines with more processes than that.
+        let count = proc_listallpids(nil, 0)
         guard count > 0 else { return [] }
 
+        var pids = [Int32](repeating: 0, count: Int(count))
+        let written = proc_listallpids(&pids, count * Int32(MemoryLayout<Int32>.stride))
+        guard written > 0 else { return [] }
+
         var samples: [Sample] = []
-        samples.reserveCapacity(Int(count))
+        samples.reserveCapacity(Int(written))
         var buffer = [CChar](repeating: 0, count: 4096)
 
-        for index in 0..<Int(count) where index < pids.count {
-            let pid = pids[index]
+        for pid in pids.prefix(Int(written)) {
             buffer.withUnsafeMutableBufferPointer { pointer in
                 let length = proc_pidpath(pid, pointer.baseAddress, UInt32(pointer.count))
                 guard length > 0, let base = pointer.baseAddress else { return }
@@ -73,8 +56,8 @@ enum ProcessMemory {
 /// are pre-formatted so no formatting work happens inside `View.body`.
 final class AppStat: ObservableObject {
     let path: String
-    @Published private(set) var sizeText: String = "—"
-    @Published private(set) var memoryText: String = "—"
+    @Published private(set) var sizeText: String = ByteFormatter.placeholder
+    @Published private(set) var memoryText: String = ByteFormatter.placeholder
 
     init(path: String) { self.path = path }
 
@@ -103,8 +86,6 @@ final class AppMetrics: ObservableObject {
         let bundleModifiedAt: TimeInterval
     }
 
-    private static let cacheKey = "AppShelf.sizeCache.v2"
-
     private let queue: OperationQueue
     private let defaults: UserDefaults
     private var records: [String: Record] = [:]
@@ -123,13 +104,14 @@ final class AppMetrics: ObservableObject {
         queue.qualityOfService = .utility
         self.queue = queue
 
-        if let data = defaults.data(forKey: Self.cacheKey),
+        if let data = defaults.data(forKey: ShelfDefaults.sizeCache),
            let saved = try? JSONDecoder().decode([String: Record].self, from: data) {
             records = saved
             sizes = saved.mapValues(\.bytes)
         }
-        // The first cache format only stored bundle sizes and is no longer written.
-        defaults.removeObject(forKey: "AppShelf.sizeCache.v1")
+        for key in ShelfDefaults.retired {
+            defaults.removeObject(forKey: key)
+        }
     }
 
     /// The observable a single tile should watch. Only changed values are published.
@@ -141,21 +123,25 @@ final class AppMetrics: ObservableObject {
         return created
     }
 
-    func sizeText(for path: String) -> String {
-        ByteFormatter.disk(sizes[path] ?? 0)
-    }
-
-    func memoryText(for path: String) -> String {
-        ByteFormatter.memory(memory[path] ?? 0)
-    }
-
-    /// Remembers the known apps but measures nothing yet.
+    /// Remembers the known apps and forgets the numbers for anything that has gone away.
     ///
-    /// Disk usage is requested per tile as it scrolls into view, so opening the app
-    /// no longer queues hundreds of directory walks or touches the file system on
-    /// the main thread while the grid is still settling.
+    /// The three dictionaries used to only ever grow, so an uninstalled app kept its
+    /// measurement in memory *and* in the persisted cache forever, and every memory scan
+    /// walked those dead entries.
     func register(_ apps: [AppItem]) {
         trackedApps = apps
+        prune(to: Set(apps.map(\.path)))
+    }
+
+    private func prune(to live: Set<String>) {
+        guard stats.keys.contains(where: { !live.contains($0) })
+            || records.keys.contains(where: { !live.contains($0) }) else { return }
+        stats = stats.filter { live.contains($0.key) }
+        let removedRecords = records.filter { !live.contains($0.key) }
+        guard !removedRecords.isEmpty else { return }
+        records = records.filter { live.contains($0.key) }
+        sizes = records.mapValues(\.bytes)
+        scheduleSave()
     }
 
     /// Called when a tile appears. Cached apps cost nothing; everything else is
@@ -195,12 +181,11 @@ final class AppMetrics: ObservableObject {
 
     /// Sums every process whose executable lives inside the given bundles.
     ///
-    /// The scan walks every pid on the system, which is thousands of syscalls, so it
-    /// runs on the utility queue and only the comparison and publish happen on main.
+    /// The scan walks every pid on the system, so it runs on the utility queue and only the
+    /// comparison and publish happen on main.
     func updateMemory(forAppPaths paths: [String]) {
         guard !memoryScanScheduled else { return }
         memoryScanScheduled = true
-        let paths = paths
 
         queue.addOperation { [weak self] in
             let samples = ProcessMemory.snapshot()
@@ -235,12 +220,24 @@ final class AppMetrics: ObservableObject {
         inFlight.removeAll()
         records = [:]
         sizes = [:]
-        defaults.removeObject(forKey: Self.cacheKey)
+        defaults.removeObject(forKey: ShelfDefaults.sizeCache)
     }
 
+    /// Re-measures every known app.
+    ///
+    /// A bundle walk measured 10–150 ms each on this machine, so a full pass over a few
+    /// hundred apps runs for a while: it reports progress and can be cancelled.
     func recalculate() {
         invalidateDiskCache()
         trackedApps.forEach(forceMeasure)
+    }
+
+    /// Number of measurements still queued or in flight, for the settings panel.
+    var pendingMeasurements: Int { queue.operationCount }
+
+    func cancelRecalculation() {
+        queue.cancelAllOperations()
+        inFlight.removeAll()
     }
 
     private func complete(path: String, bytes: Int64, bundleModifiedAt: TimeInterval) {
@@ -257,7 +254,7 @@ final class AppMetrics: ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             guard let data = try? JSONEncoder().encode(self.records) else { return }
-            self.defaults.set(data, forKey: AppMetrics.cacheKey)
+            self.defaults.set(data, forKey: ShelfDefaults.sizeCache)
         }
         saveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)

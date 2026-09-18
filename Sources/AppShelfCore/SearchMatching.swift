@@ -5,26 +5,34 @@ import Foundation
 /// An app is usually known by more than one name: WeChat is filed as 微信 in its own
 /// Chinese resources and Visual Studio Code reports "Code" as its bundle name. Each of
 /// those names becomes a variant, and a query is matched against every variant.
-struct SearchTokens: Hashable, Sendable {
-    struct Variant: Hashable, Sendable {
+public struct SearchTokens: Hashable, Sendable {
+    public struct Variant: Hashable, Sendable {
         /// Diacritic- and case-insensitive name.
-        let folded: String
+        public let folded: String
         /// `folded` split into words, so word matches outrank accidental substrings.
-        let words: [String]
+        public let words: [String]
         /// `folded` without whitespace, so "visual studio" matches "visualstudio".
-        let compact: String
+        public let compact: String
         /// Pinyin syllables joined together, e.g. 微信 -> "weixin". Empty for Latin-only names.
-        let pinyin: String
+        public let pinyin: String
         /// First letter of every syllable or word, e.g. 微信 -> "wx", Visual Studio Code -> "vsc".
-        let initials: String
+        public let initials: String
+
+        public init(folded: String, words: [String], compact: String, pinyin: String, initials: String) {
+            self.folded = folded
+            self.words = words
+            self.compact = compact
+            self.pinyin = pinyin
+            self.initials = initials
+        }
     }
 
     /// The display name is first; localized and file-system names follow.
-    let variants: [Variant]
+    public let variants: [Variant]
     /// Bundle identifier and category, matched with a lower weight than the names.
-    let extras: String
+    public let extras: String
 
-    init(name: String, aliases: [String] = [], extras: [String] = []) {
+    public init(name: String, aliases: [String] = [], extras: [String] = []) {
         var seen = Set<String>()
         var variants: [Variant] = []
 
@@ -59,8 +67,8 @@ struct SearchTokens: Hashable, Sendable {
 }
 
 /// Converts Chinese characters to latin syllables using the system transliterator.
-enum Pinyin {
-    static func syllables(of text: String) -> [String] {
+public enum Pinyin {
+    public static func syllables(of text: String) -> [String] {
         guard !text.isEmpty else { return [] }
         // `.mandarinToLatin` keeps latin words intact, so mixed names such as
         // "微信 WeChat" still produce useful tokens for both scripts.
@@ -74,9 +82,9 @@ enum Pinyin {
 }
 
 /// Scores an app against a query. Higher is better; `nil` means no match.
-enum SearchMatcher {
+public enum SearchMatcher {
     /// Returns the relevance score for `query`, or `nil` when the app should be filtered out.
-    static func score(_ tokens: SearchTokens, query: String) -> Int? {
+    public static func score(_ tokens: SearchTokens, query: String) -> Int? {
         let foldedQuery = normalize(query)
         guard !foldedQuery.isEmpty else { return 0 }
 
@@ -146,9 +154,15 @@ enum SearchMatcher {
         }
 
         // 4. Pinyin: full spelling and initials.
+        //
+        // An exact hit on either is the user typing the name the way this app is meant to
+        // be searched, so it sits in the same tier as an exact or whole-word name match.
+        // It used to score 540/500, which let a bare *prefix* of some other app's
+        // romanized file name win: "wx" put 企业微信 (whose bundle is WXWork.app) above
+        // 微信, whose initials *are* wx.
         if !variant.pinyin.isEmpty {
             if variant.pinyin == compactQuery {
-                offer(540)
+                offer(900)
             } else if variant.pinyin.hasPrefix(compactQuery) {
                 offer(510)
             } else if variant.pinyin.contains(compactQuery) {
@@ -158,7 +172,7 @@ enum SearchMatcher {
 
         if !variant.initials.isEmpty {
             if variant.initials == compactQuery {
-                offer(500)
+                offer(880)
             } else if variant.initials.hasPrefix(compactQuery) {
                 offer(480)
             } else if variant.initials.contains(compactQuery) {
@@ -182,19 +196,19 @@ enum SearchMatcher {
     }
 
     /// Lowercases, trims, and strips diacritics so "WeiXin" and "wéixìn" behave the same.
-    static func normalize(_ text: String) -> String {
+    public static func normalize(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         return trimmed.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
             .lowercased()
     }
 
-    static func compact(_ text: String) -> String {
+    public static func compact(_ text: String) -> String {
         text.filter { !$0.isWhitespace && !$0.isPunctuation }
     }
 
     /// True when every character of `needle` appears in `haystack` in the same order.
-    static func isSubsequence(_ needle: String, in haystack: String) -> Bool {
+    public static func isSubsequence(_ needle: String, in haystack: String) -> Bool {
         if needle.isEmpty { return true }
         if needle.count > haystack.count { return false }
 
@@ -211,4 +225,30 @@ enum SearchMatcher {
         }
         return true
     }
+
+    /// Ranks `items` for `query`, dropping everything that does not match.
+    ///
+    /// Extracted from `LauncherStore.searchResults` so the ordering contract — score
+    /// first, running apps break ties, then name — is testable without a store.
+    public static func ranked<Item: RankedApp>(_ items: [Item], query: String, limit: Int) -> [Item] {
+        let scored: [(Item, Int)] = items.compactMap { item in
+            guard let score = score(item.searchTokens, query: query) else { return nil }
+            return (item, score)
+        }
+
+        let sorted = scored.sorted { lhs, rhs in
+            if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+            if lhs.0.isRunning != rhs.0.isRunning { return lhs.0.isRunning }
+            return lhs.0.displayName.localizedCaseInsensitiveCompare(rhs.0.displayName) == .orderedAscending
+        }
+
+        return Array(sorted.prefix(limit).map(\.0))
+    }
+}
+
+/// The minimum an item must expose to take part in ranked search.
+public protocol RankedApp {
+    var displayName: String { get }
+    var isRunning: Bool { get }
+    var searchTokens: SearchTokens { get }
 }

@@ -2,6 +2,8 @@ import AppKit
 import Combine
 import SwiftUI
 
+import AppShelfCore
+
 /// Drives the floating search panel: filtering, keyboard navigation, and launching.
 /// The panel shows only the search field and its results, never the full window.
 @MainActor
@@ -286,7 +288,7 @@ struct SpotlightView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.white.opacity(0.20), lineWidth: 1)
+                .stroke(AppShelfPalette.panelEdge, lineWidth: 1)
         }
         .onAppear {
             focusField()
@@ -327,25 +329,37 @@ struct SpotlightView: View {
         .frame(height: 54)
     }
 
+    /// The list is capped at eight rows, so the selection can walk out of sight.
+    /// `ScrollViewReader` keeps the highlighted row under the scroll position, which is the
+    /// only reason ↑/↓ past the eighth result is usable at all.
     private var resultsList: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(spacing: 2) {
-                ForEach(Array(controller.results.enumerated()), id: \.element.id) { index, app in
-                    SpotlightRow(
-                        app: app,
-                        isSelected: index == controller.selectedIndex
-                    ) {
-                        controller.open(app)
-                    }
-                    .onHover { isHovering in
-                        if isHovering { controller.select(index) }
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                // A plain VStack, not a lazy one: `scrollTo` cannot reach a row that has
+                // not been realized yet, which is exactly the row the arrow keys move to.
+                VStack(spacing: 2) {
+                    ForEach(Array(controller.results.enumerated()), id: \.element.id) { index, app in
+                        SpotlightRow(
+                            app: app,
+                            isSelected: index == controller.selectedIndex
+                        ) {
+                            controller.open(app)
+                        }
+                        .id(app.path)
+                        .onHover { isHovering in
+                            if isHovering { controller.select(index) }
+                        }
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .frame(maxHeight: 8 * SpotlightRow.rowHeight)
+            .onChange(of: controller.selectedIndex, initial: false) { _, index in
+                guard controller.results.indices.contains(index) else { return }
+                proxy.scrollTo(controller.results[index].path, anchor: .center)
+            }
         }
-        .frame(maxHeight: 8 * SpotlightRow.rowHeight)
     }
 
     private var noResults: some View {
