@@ -5,6 +5,11 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  # The default workflow token is read-only on this repo, so publishing fails with
+  # HTTP 403 unless contents:write is granted explicitly.
+  contents: write
+
 jobs:
   release:
     name: Package and publish
