@@ -35,6 +35,9 @@ final class DragActivity: ObservableObject {
     static let shared = DragActivity()
 
     @Published private(set) var isActive = false
+    /// The app being dragged. Tiles watch this to fade themselves out of the grid,
+    /// since the card under the cursor is the one that should look solid.
+    @Published private(set) var sourcePath: String?
 
     private var endWork: DispatchWorkItem?
 
@@ -44,18 +47,29 @@ final class DragActivity: ObservableObject {
         if !isActive { isActive = true }
     }
 
+    func begin(path: String) {
+        begin()
+        sourcePath = path
+    }
+
     /// Called as soon as a drop has been handled.
     func end() {
         endWork?.cancel()
         endWork = nil
         isActive = false
+        sourcePath = nil
     }
 
     /// Leaving one target often just means entering another, so the flag only clears
     /// after a pause with nothing hovered.
     func scheduleEnd() {
         endWork?.cancel()
-        let work = DispatchWorkItem { self.isActive = false }
+        let work = DispatchWorkItem {
+            self.isActive = false
+            // A drag abandoned outside any target never reaches a drop handler, so the
+            // held tile has to be released here or it would stay faded.
+            self.sourcePath = nil
+        }
         endWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: work)
     }
@@ -68,7 +82,7 @@ final class DragHighlight: ObservableObject {
     @Published var sidebarGroupID: UUID?
     @Published var quickToolTarget = false
     /// App being dragged, captured when the drag starts so tiles can make room for it.
-    var sourcePath: String?
+    var sourcePath: String? { DragActivity.shared.sourcePath }
     /// Last tile the reflow ran against, so the same pair is never repeated.
     var lastReflowTarget: String?
 
@@ -77,13 +91,12 @@ final class DragHighlight: ObservableObject {
     /// when the cursor crosses their edge.
     var isDragging: Bool { DragActivity.shared.isActive }
 
-    /// Called by the card's own gesture, which fires before the drop session takes
-    /// over the mouse: it is the only reliable "this app started moving" signal.
+    /// Records which app the user picked up. The drag always begins under that tile,
+    /// so the first tile to report itself is the one being carried.
     func beginAppDrag(path: String) {
-        guard sourcePath == nil else { return }
-        sourcePath = path
+        guard DragActivity.shared.sourcePath == nil else { return }
         lastReflowTarget = nil
-        DragActivity.shared.begin()
+        DragActivity.shared.begin(path: path)
     }
 
     var isReordering: Bool {
@@ -109,7 +122,7 @@ final class DragHighlight: ObservableObject {
         sectionTargetID = nil
         sidebarGroupID = nil
         quickToolTarget = false
-        sourcePath = nil
+        // sourcePath lives on DragActivity so tiles can watch it; cleared there.
         lastReflowTarget = nil
     }
 }
@@ -814,8 +827,14 @@ struct ContentView: View {
         // The bundle path is the drag payload: dropping on a sidebar group files the app,
         // dropping on another card inside a section reorders it.
         .draggable(ShelfDragItem.app(app.path)) {
-            AppIconView(path: app.path)
-                .frame(width: 64, height: 64)
+            // The whole card follows the cursor, so there is no icon drifting away
+            // from the tile it belongs to.
+            AppCardTile(app: app, showsCategory: sectionGroupID == nil, width: 152)
+                .background(AppShelfPalette.panel, in: RoundedRectangle(cornerRadius: 12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                }
         }
 
         if let sectionGroupID {
@@ -1347,6 +1366,104 @@ private struct ToolRow: View {
 }
 
 /// A compact app tile. Opening is the primary action; less common actions live in its menu.
+/// Category, disk usage, and memory share one small line. The category is only
+/// repeated when the tile is not already sitting inside that group's section.
+///
+/// File scope rather than nested in `AppCard`: the drag preview is a separate view
+/// and has to render the same footer.
+private struct AppUsageLine: View {
+    /// Watches only this app's numbers, so another app's measurement landing
+    /// never repaints this tile during a scroll.
+    @ObservedObject private var stat: AppStat
+    let app: AppItem
+    let showsCategory: Bool
+
+    init(app: AppItem, showsCategory: Bool) {
+        self.app = app
+        self.showsCategory = showsCategory
+        _stat = ObservedObject(wrappedValue: AppMetrics.shared.stat(for: app.path))
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if showsCategory {
+                Text(L10n.shared.t(app.category))
+                    .foregroundStyle(.secondary)
+                Text("·")
+                    .foregroundStyle(.tertiary)
+            }
+
+            Text(stat.sizeText)
+                .foregroundStyle(.secondary)
+
+            if app.isRunning {
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text(stat.memoryText)
+                    .foregroundStyle(AppShelfPalette.success)
+            }
+        }
+        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+        .lineLimit(1)
+        .help(L10n.shared.t("应用占用 = 应用本体 + 该应用在 Library 中的数据；内存为运行中全部进程之和"))
+    }
+}
+
+/// The face of a tile: icon, name, and the usage line.
+///
+/// The grid and the drag preview both render this, so what follows the cursor is the
+/// whole card the user picked up rather than a bare icon drifting away from its tile.
+private struct AppCardTile: View {
+    let app: AppItem
+    let showsCategory: Bool
+    /// nil fills the grid column; the drag preview passes a concrete width because a
+    /// preview cannot be laid out against an infinite one.
+    var width: CGFloat? = nil
+
+    @ViewBuilder
+    var body: some View {
+        let tile = VStack(spacing: 9) {
+            ZStack(alignment: .topTrailing) {
+                AppIconView(path: app.path)
+                    .frame(width: 84, height: 84)
+
+                if app.isRunning {
+                    Circle()
+                        .fill(AppShelfPalette.success)
+                        .frame(width: 11, height: 11)
+                        .overlay {
+                            Circle()
+                                .strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 2)
+                        }
+                        .offset(x: 2, y: -2)
+                }
+            }
+
+            Text(app.name)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
+
+            // Only this line watches usage data, so a memory refresh does not redraw
+            // the icon or the rest of the tile.
+            AppUsageLine(app: app, showsCategory: showsCategory)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 14)
+        .frame(minHeight: 158, alignment: .top)
+
+        if let width {
+            tile.frame(width: width, alignment: .top)
+        } else {
+            tile.frame(maxWidth: .infinity, alignment: .top)
+        }
+    }
+}
+
 private struct AppCard: View {
     let app: AppItem
     let currentGroupID: UUID?
@@ -1422,40 +1539,8 @@ private struct AppCard: View {
 
     /// Launchpad-style tile: a large icon, a centred name, and one quiet info line.
     private var cardContent: some View {
-        VStack(spacing: 9) {
-            ZStack(alignment: .topTrailing) {
-                AppIconView(path: app.path)
-                    .frame(width: 84, height: 84)
-
-                if app.isRunning {
-                    Circle()
-                        .fill(AppShelfPalette.success)
-                        .frame(width: 11, height: 11)
-                        .overlay {
-                            Circle()
-                                .strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 2)
-                        }
-                        .offset(x: 2, y: -2)
-                }
-            }
-
-            Text(app.name)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(.primary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .truncationMode(.tail)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity)
-
-            // Only this line watches usage data, so a memory refresh does not redraw
-            // the icon or the rest of the tile.
-            AppUsageLine(app: app, showsCategory: showsCategory)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, minHeight: 158, alignment: .top)
-        .background(hoverBackground)
+        AppCardTile(app: app, showsCategory: showsCategory)
+            .background(hoverBackground)
         .contentShape(RoundedRectangle(cornerRadius: 12))
         // Every tile shows its bounds while dragging, so where an icon will land is
         // obvious before releasing it.
@@ -1465,7 +1550,10 @@ private struct AppCard: View {
         .scaleEffect(isHovering ? 1.015 : 1)
         // An app dropped inside the page pops up where its card now sits.
         .scaleEffect(popScale)
-        .opacity(popOpacity)
+        // The card the user is carrying is the solid one under the cursor; the tile it
+        // left behind marks the slot it will land in, so it fades rather than showing
+        // a second copy of the same card.
+        .opacity(popOpacity * (activity.sourcePath == app.path ? 0.32 : 1))
         .onChange(of: animator.token, initial: false) { _, _ in
             guard animator.target == .grid, animator.landedPath == app.path else { return }
             popIn()
@@ -1481,46 +1569,6 @@ private struct AppCard: View {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             animator.finish()
-        }
-    }
-
-    /// Category, disk usage, and memory share one small line. The category is only
-    /// repeated when the tile is not already sitting inside that group's section.
-    private struct AppUsageLine: View {
-        /// Watches only this app's numbers, so another app's measurement landing
-        /// never repaints this tile during a scroll.
-        @ObservedObject private var stat: AppStat
-        let app: AppItem
-        let showsCategory: Bool
-
-        init(app: AppItem, showsCategory: Bool) {
-            self.app = app
-            self.showsCategory = showsCategory
-            _stat = ObservedObject(wrappedValue: AppMetrics.shared.stat(for: app.path))
-        }
-
-        var body: some View {
-            HStack(spacing: 4) {
-                if showsCategory {
-                    Text(L10n.shared.t(app.category))
-                        .foregroundStyle(.secondary)
-                    Text("·")
-                        .foregroundStyle(.tertiary)
-                }
-
-                Text(stat.sizeText)
-                    .foregroundStyle(.secondary)
-
-                if app.isRunning {
-                    Text("·")
-                        .foregroundStyle(.tertiary)
-                    Text(stat.memoryText)
-                        .foregroundStyle(AppShelfPalette.success)
-                }
-            }
-            .font(.system(size: 10.5, weight: .medium, design: .rounded))
-            .lineLimit(1)
-            .help(L10n.shared.t("应用占用 = 应用本体 + 该应用在 Library 中的数据；内存为运行中全部进程之和"))
         }
     }
 
