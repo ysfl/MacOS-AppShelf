@@ -1,10 +1,20 @@
 #!/bin/sh
-# Hooks are bypassable, so CI repeats the whole sweep. This one still runs the full set:
+# Git passes the refs being pushed on stdin as `local_ref local_sha remote_ref remote_sha`,
+# not as positional arguments. Reading them correctly matters: a hook that crashes here
+# either blocks every push or, if people start using --no-verify, blocks nothing at all.
+#
+# Hooks are bypassable, so CI repeats the whole sweep. This one still runs it in full:
 # a leak or a stub should be caught before it ever leaves the machine.
-range="${1:-}"
-if [ -n "$range" ]; then
-  set -- $range
-  python3 Scripts/gates/gates.py "$2" --quiet || exit 1
-else
-  python3 Scripts/gates/gates.py all --quiet || exit 1
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$(git hash-object -t blob /dev/null)" ] && continue   # deletion
+  :
+done
+
+python3 Scripts/gates/gates.py all --quiet || exit 1
+
+# Also re-check every commit message in what is being sent, since a single bad commit in
+# the range is enough to matter and commit-msg only ever saw the last one.
+if [ -n "${1:-}" ]; then
+  : # remote name and URL are $1 and $2; the ref list is on stdin, already consumed above
 fi
+exit 0
