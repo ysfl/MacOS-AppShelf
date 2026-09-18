@@ -4,10 +4,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG="${1:-release}"
+# The version is written into the bundle, so a release can never carry a stale one.
+# build-release.sh passes it; a plain local build falls back to the top CHANGELOG entry.
+VERSION="${APP_VERSION:-$(sed -n 's/^## \([0-9][.0-9]*\).*/\1/p' "$PROJECT_DIR/CHANGELOG.md" | head -1)}"
+BUILD_NUMBER="${BUILD_NUMBER:-$VERSION}"
+[ -n "$VERSION" ] || { echo "Could not determine a version. Pass APP_VERSION=1.2.1 or add it to CHANGELOG.md" >&2; exit 1; }
 
 cd "$PROJECT_DIR"
 # SwiftPM writes build products to .build; the final bundle is assembled below.
-swift build -c "$CONFIG" --product AppShelf
+# warnings-as-errors is the project's own contribution gate (README), so the release
+# path enforces it rather than leaving it to whoever remembers to type it.
+swift build -c "$CONFIG" -Xswiftc -warnings-as-errors --product AppShelf
 
 BIN_PATH="$(swift build -c "$CONFIG" --show-bin-path)/AppShelf"
 APP_PATH="$PROJECT_DIR/dist/AppShelf.app"
@@ -19,6 +26,10 @@ rm -rf "$APP_PATH"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$BIN_PATH" "$APP_PATH/Contents/MacOS/AppShelf"
 cp "$PROJECT_DIR/Info.plist" "$APP_PATH/Contents/Info.plist"
+# The tracked Info.plist keeps a placeholder; the real numbers land here instead, so
+# there is still exactly one place to read a version from.
+/usr/bin/plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP_PATH/Contents/Info.plist"
+/usr/bin/plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$APP_PATH/Contents/Info.plist"
 
 # Bundle the per-language JSON files so the UI can be localized at runtime.
 mkdir -p "$APP_PATH/Contents/Resources/Localization"
@@ -51,4 +62,4 @@ done
 # Ad-hoc signing lets macOS launch the locally built bundle without a developer account.
 /usr/bin/codesign --force --deep --sign - "$APP_PATH" >/dev/null
 
-echo "Built: $APP_PATH"
+echo "Built: $APP_PATH  (version $VERSION, build $BUILD_NUMBER)"
