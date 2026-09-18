@@ -1,10 +1,23 @@
 # 应用架 | AppShelf
 
-应用架是一个原生 macOS 应用启动器。它从常见应用目录读取 `.app`，用分组和搜索整理列表，点击卡片即可启动应用。
+应用架是一个原生 macOS 应用启动器。它从常见应用目录读取 `.app`，用分组和搜索整理列表，点击卡片即可启动应用。卡片采用启动台式排版，支持拖拽归组、磁盘与内存占用显示、拼音搜索、全局搜索浮层，以及中文 / 英文界面。
 
-AppShelf is a native macOS app launcher. It reads `.app` bundles from common application folders, organizes them into groups, and opens them from a searchable grid.
+AppShelf is a native macOS app launcher. It reads `.app` bundles from common application folders, organizes them into groups, and opens them from a searchable grid. It features a Launchpad-style tile layout, drag-to-group, disk and memory usage, pinyin search, a global search panel, and a Chinese / English interface.
 
-当前版本 / Current version: `1.1.0`
+当前版本 / Current version: `1.2.0`
+
+## 1.2.0 的新变化 / What's new in 1.2.0
+
+- 多语言支持：内置中文与英文，标题栏一键切换，无需重启。翻译按语种拆成独立文件，支持外部扩展。
+  Multi-language: Chinese and English ship with the app and switch from the toolbar without restarting. Translations live in one file per language and can be extended externally.
+- 明暗模式切换：可跟随系统，或强制浅色 / 深色。
+  Appearance: follow the system, or force light / dark.
+- 拖拽体验对齐启动台：整张卡片跟随光标，沿途图标自动让位，分组边框常亮指示落点。
+  Launchpad-style dragging: the whole card follows the cursor, tiles on the path slide aside, and the target block stays lit.
+- 列表性能优化：磁盘占用改为按卡片懒加载，进程内存扫描移出主线程，滚动更顺滑。
+  Performance: disk usage is loaded lazily per tile and the process scan moved off the main thread, so scrolling is smoother.
+- 搜索时按 `esc` 退出搜索；拖拽状态增加了 esc / 松手 / 滚动等多重兜底，不会再卡住。
+  `esc` exits search; drag state now has esc, mouse-release, and scroll fallbacks so it can no longer get stuck.
 
 ## About
 
@@ -50,11 +63,39 @@ If you switch between Finder, Launchpad, and Spotlight to find apps, AppShelf gi
 - The focus-search shortcut can be recorded in Settings, disabled, or restored to its default (⌥Space).
 - 提供计算器、终端、活动监视器、截图和系统设置快捷入口，也可以手动加入任意 `.app`。
 - Includes shortcuts for Calculator, Terminal, Activity Monitor, Screenshot, and System Settings. Any `.app` can also be added manually.
+- 界面支持中文与英文，标题栏可随时切换；外观可跟随系统或固定为浅色 / 深色。
+- The interface speaks Chinese and English and switches from the toolbar; the appearance can follow the system or be pinned to light / dark.
+- 拖动应用时整张卡片跟随光标，路径上的图标按启动台方式让位，分组整块常亮显示落点区域。
+- While dragging, the whole card follows the cursor, icons on the path slide aside like Launchpad, and the hovered block stays lit to show the destination.
+- 拖动时每个分组下方（卡片之外的位置）出现红色区域，拖进去即从该分组移除。
+- While dragging, a red strip appears below each group's tiles (outside the grid); dropping there removes the app from that group.
+- 磁盘占用在卡片出现在屏幕上时才测量，进程内存扫描在后台进行，列表滚动更顺滑。
+- Disk usage is measured only once a tile appears on screen and the process scan runs in the background, keeping scrolling smooth.
+- 搜索时按 `esc` 可退出搜索；刷新会重新扫描磁盘，执行前有确认提示。
+- Press `esc` while searching to exit search; refreshing rescans the disk and asks for confirmation first.
+
+## 多语言 / Localization
+
+每个语种一个 JSON 文件，内置于应用包内：`Resources/Localization/zh-Hans.json`、`en.json`。
+
+Each language is a single JSON file bundled with the app: `Resources/Localization/zh-Hans.json` and `en.json`.
+
+不需要重新编译即可新增或覆盖语种：把 `<语言代码>.json`（例如 `ja.json`）放到下面的目录，重新启动应用即可在语言菜单中看到它。
+
+You can add or override a language without recompiling: drop a `<language-code>.json` (for example `ja.json`) into the folder below and restart the app to see it in the language menu.
+
+```
+~/Library/Application Support/AppShelf/Localization/
+```
+
+该路径也会显示在“设置”面板中。外部文件按语种覆盖内置文件；缺少的条目会回退到内置英文，再回退到界面原文。
+
+The same path is shown in the Settings panel. External files override the bundled ones per language; missing entries fall back to the bundled English, then to the original string.
 
 ## 安装 / Install
 
-1. 下载 [AppShelf-1.0.0.dmg](release/AppShelf-1.0.0.dmg)，然后打开 DMG。
-   Download [AppShelf-1.0.0.dmg](release/AppShelf-1.0.0.dmg) and open the DMG.
+1. 下载 [AppShelf-1.2.0.dmg](release/AppShelf-1.2.0.dmg)，然后打开 DMG。
+   Download [AppShelf-1.2.0.dmg](release/AppShelf-1.2.0.dmg) and open the DMG.
 2. 把“应用架”拖到“应用程序”文件夹。
    Drag “应用架” to the Applications folder.
 3. 首次打开使用 Finder 右键菜单中的“打开”。发布包使用 ad-hoc 签名，未经过 Apple notarization；应用架不会请求额外系统权限。
@@ -72,8 +113,8 @@ The release checksum is in [`release/SHA256SUMS`](release/SHA256SUMS).
 - A Swift 6.0 toolchain. Xcode 16 or newer is suitable, as are Xcode Command Line Tools that provide a matching Swift toolchain.
 - 构建脚本会使用 macOS 自带的 `swift`、`sips`、`iconutil`、`codesign` 和 `hdiutil`。
 - The build scripts use the macOS-provided `swift`, `sips`, `iconutil`, `codesign`, and `hdiutil` tools.
-- `1.0.0` 安装包在 Apple Silicon macOS 上构建和验证，当前不是 universal binary。Intel Mac 可以尝试从源码构建，但不在此发布包的验证范围内。
-- The `1.0.0` package was built and verified on Apple Silicon macOS and is not a universal binary. Intel Macs may build from source, but are outside the verification scope of this package.
+- `1.2.0` 安装包在 Apple Silicon macOS 上构建和验证，当前不是 universal binary。Intel Mac 可以尝试从源码构建，但不在此发布包的验证范围内。
+- The `1.2.0` package was built and verified on Apple Silicon macOS and is not a universal binary. Intel Macs may build from source, but are outside the verification scope of this package.
 
 本次发布的构建验证环境：macOS 26.5.2 (arm64)、Xcode 26.2、Swift 6.2.3。它们是验证记录，不是应用的最低运行要求。
 
@@ -98,14 +139,14 @@ swift build -c debug -Xswiftc -warnings-as-errors
 open dist/AppShelf.app
 ```
 
-生成 `1.0.0` 安装包：
+生成 `1.2.0` 安装包：
 
-Build the `1.0.0` installer:
+Build the `1.2.0` installer:
 
 ```bash
-./Scripts/build-release.sh 1.0.0
+./Scripts/build-release.sh 1.2.0
 (cd release && shasum -a 256 -c SHA256SUMS)
-hdiutil verify release/AppShelf-1.0.0.dmg
+hdiutil verify release/AppShelf-1.2.0.dmg
 ```
 
 ## 项目结构 / Project Layout
@@ -126,8 +167,12 @@ hdiutil verify release/AppShelf-1.0.0.dmg
 - `Sources/AppShelf/SpotlightPanel.swift`: the Spotlight-style floating panel and its AppKit window.
 - `Sources/AppShelf/SettingsView.swift`：快捷键录制与开关偏好。
 - `Sources/AppShelf/SettingsView.swift`: the shortcut recorder and preference toggles.
-- `Sources/AppShelf/AppDelegate.swift`：Dock 菜单、菜单栏图标和热键接线。
-- `Sources/AppShelf/AppDelegate.swift`: the Dock menu, menu bar icon, and hotkey wiring.
+- `Sources/AppShelf/L10n.swift`：多语言管理，按语种加载内置与外部 JSON 翻译文件。
+- `Sources/AppShelf/L10n.swift`: localization, loading bundled and external per-language JSON files.
+- `Sources/AppShelf/Appearance.swift`：明暗模式（跟随系统 / 浅色 / 深色）的偏好与应用。
+- `Sources/AppShelf/Appearance.swift`: the light/dark appearance preference and how it is applied.
+- `Sources/AppShelf/AppDelegate.swift`：Dock 菜单、菜单栏图标、热键接线，以及拖拽状态的兜底监听。
+- `Sources/AppShelf/AppDelegate.swift`: the Dock menu, menu bar icon, hotkey wiring, and the drag-state safety monitors.
 - `Sources/AppShelf/AppShelfApp.swift`：SwiftUI 应用入口和窗口命令。
 - `Sources/AppShelf/AppShelfApp.swift`: the SwiftUI entry point and window commands.
 - `Scripts/build-app.sh`：构建并 ad-hoc 签名 `.app`。
@@ -145,9 +190,13 @@ The app list comes from the local file system and `NSWorkspace`. Groups are stor
 
 Disk usage covers the `.app` bundle plus the app's data under the user's `Library` (application support, sandbox and group containers, caches, saved state). Results are cached locally in `UserDefaults` and re-measured whenever the bundle changes.
 
-内存占用通过系统进程接口读取常驻内存，并把 bundle 内的 helper 与 XPC 进程一并计入，每 3 秒刷新一次。全局快捷键由 Carbon 注册，需要应用处于运行状态。
+内存占用通过系统进程接口读取常驻内存，并把 bundle 内的 helper 与 XPC 进程一并计入，在后台定期刷新，不阻塞界面。全局快捷键由 Carbon 注册，需要应用处于运行状态。
 
-Memory usage is read from the system process interface as resident memory, summed over every process inside the bundle, and refreshed every three seconds. The global shortcut is registered through Carbon and requires the app to be running.
+Memory usage is read from the system process interface as resident memory, summed over every process inside the bundle, and refreshed periodically on a background queue so it never blocks the UI. The global shortcut is registered through Carbon and requires the app to be running.
+
+磁盘占用只在卡片滚动到屏幕上时才开始测量，未查看的应用不会产生磁盘读取。
+
+Disk usage is only measured once a tile scrolls onto the screen, so apps you never look at cost no disk I/O.
 
 ## 贡献 / Contributing
 
