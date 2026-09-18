@@ -20,6 +20,7 @@ extension UTType {
 /// The data is deliberately untouched until the drop. That keeps every index stable for
 /// the whole gesture — reordering as we went made the indices move under the calculation,
 /// which is what caused the "sometimes it takes two tiles" behaviour.
+@MainActor
 final class DragReflow: ObservableObject {
     static let shared = DragReflow()
 
@@ -54,6 +55,7 @@ final class DragReflow: ObservableObject {
 /// move, so subscribing every tile to it would repaint the whole grid while dragging.
 /// This one only changes twice per drag, so tiles can safely watch it to draw their
 /// outline and fade themselves out of the grid.
+@MainActor
 final class DragActivity: ObservableObject {
     static let shared = DragActivity()
 
@@ -133,6 +135,7 @@ final class DragActivity: ObservableObject {
 /// This lives in its own object instead of the content view on purpose: only the small
 /// highlight views observe it, so moving the cursor during a drag repaints a few
 /// outlines rather than rebuilding every card in the window.
+@MainActor
 final class DragHighlight: ObservableObject {
     static let shared = DragHighlight()
 
@@ -184,6 +187,7 @@ final class DragHighlight: ObservableObject {
 ///
 /// The numbers come from `ShelfGrid`, which is the same source the `GridItem` array is
 /// built from, so a slide can no longer disagree with what the grid actually laid out.
+@MainActor
 final class GridMetrics: ObservableObject {
     static let shared = GridMetrics()
 
@@ -207,6 +211,7 @@ final class GridMetrics: ObservableObject {
 ///
 /// Without it a card simply vanishes from its old section the moment the mouse is
 /// released, which reads as a glitch rather than as a move.
+@MainActor
 final class DropAnimator: ObservableObject {
     static let shared = DropAnimator()
 
@@ -272,7 +277,7 @@ private extension View {
 
 /// Reports the grid's own size without taking part in layout.
 private struct GridSizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
+    static let defaultValue: CGSize = .zero
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
         let next = nextValue()
         if next != .zero { value = next }
@@ -365,7 +370,7 @@ private struct GroupDragPreview: View {
                 Text(title)
                     .font(.system(size: 12.5, weight: .semibold))
                 Text("\(apps.count)")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .font(.shelfCount)
                     .foregroundStyle(.secondary)
             }
 
@@ -377,7 +382,7 @@ private struct GroupDragPreview: View {
                     }
                     if apps.count > 6 {
                         Text("+\(apps.count - 6)")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.shelfNote)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -692,7 +697,7 @@ struct ContentView: View {
 
                 Text(L10n.shared.t("apps_count",
                       args: ["count": "\(store.filteredCount)", "running": "\(store.count(for: .running))"]))
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.shelfBody)
                     .foregroundStyle(.secondary)
             }
 
@@ -704,7 +709,7 @@ struct ContentView: View {
                 } icon: {
                     Image(systemName: "bolt.fill")
                 }
-                .font(.system(size: 12, weight: .medium))
+                .font(.shelfBody)
             }
             .toggleStyle(.checkbox)
             .help(L10n.shared.t("只显示正在运行的应用"))
@@ -714,7 +719,7 @@ struct ContentView: View {
                 showRefreshConfirm = true
             } label: {
                 Image(systemName: store.isScanning ? "hourglass" : "arrow.clockwise")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.shelfSectionTitle)
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
@@ -734,7 +739,7 @@ struct ContentView: View {
                 } icon: {
                     Image(systemName: "plus")
                 }
-                .font(.system(size: 12, weight: .semibold))
+                .font(.shelfLabel)
             }
             .buttonStyle(.borderedProminent)
             .tint(AppShelfPalette.accent)
@@ -757,7 +762,7 @@ struct ContentView: View {
                 }
             } label: {
                 Image(systemName: Appearance.shared.mode.symbol)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.shelfSectionTitle)
                     .accessibilityLabel(L10n.shared.t("appearance"))
             }
             // `accessibilityLabel` on the Menu itself makes `.borderlessButton` lay its
@@ -790,7 +795,7 @@ struct ContentView: View {
                 }
             } label: {
                 Image(systemName: "globe")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.shelfSectionTitle)
                     .accessibilityLabel(L10n.shared.t("language"))
             }
             .menuStyle(.borderlessButton)
@@ -802,7 +807,7 @@ struct ContentView: View {
 
             Button(action: { SettingsWindowController.shared.showWindow() }) {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.shelfSectionTitle)
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
@@ -939,7 +944,7 @@ struct ContentView: View {
 
         var body: some View {
             Text(isTarget ? L10n.shared.t("放到这里") : L10n.shared.t("拖动标题或卡片可调整顺序"))
-                .font(.system(size: 10))
+                .font(.shelfMicro)
                 .foregroundStyle(isTarget ? AppShelfPalette.accent : Color.secondary.opacity(0.7))
         }
 
@@ -991,17 +996,17 @@ struct ContentView: View {
     private func sectionHeader(_ section: AppSection) -> some View {
         let heading = HStack(spacing: 8) {
             Image(systemName: section.symbol)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.shelfLabel)
                 .foregroundStyle(section.tint)
                 .frame(width: 16)
                 .accessibilityHidden(true)
 
             Text(section.title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.shelfSectionTitle)
                 .foregroundStyle(.primary)
 
             Text("\(section.apps.count)")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .font(.shelfCount)
                 .foregroundStyle(.tertiary)
 
             Spacer(minLength: 0)
@@ -1263,21 +1268,21 @@ struct ContentView: View {
 
                 Text(store.isLoading ? L10n.shared.t("正在扫描应用…")
                                       : L10n.shared.t("apps_scanned", args: ["count": "\(store.visibleApps.count)"]))
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.shelfNote)
                     .foregroundStyle(.secondary)
 
                 Text("·")
                     .foregroundStyle(.tertiary)
 
                 Text(L10n.shared.t("updated_at", args: ["time": store.lastUpdated.formatted(date: .omitted, time: .shortened)]))
-                    .font(.system(size: 11))
+                    .font(.shelfMeta)
                     .foregroundStyle(.tertiary)
 
                 if let message = store.statusMessage {
                     Text("·")
                         .foregroundStyle(.tertiary)
                     Text(message)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.shelfNote)
                         .foregroundStyle(AppShelfPalette.accent)
                 }
 
@@ -1288,7 +1293,7 @@ struct ContentView: View {
                         store.undo()
                     } label: {
                         Label(L10n.shared.t("撤销"), systemImage: "arrow.uturn.backward")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.shelfNote)
                     }
                     .buttonStyle(.borderless)
                     .accessibilityLabel(L10n.shared.t("撤销上一步分组或排序操作"))
@@ -1519,7 +1524,7 @@ struct SidebarView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                 L10nText("/Applications · 系统应用 · ~/Applications")
-                    .font(.system(size: 10))
+                    .font(.shelfMicro)
                     .foregroundStyle(.tertiary)
                     .lineLimit(2)
             }
@@ -1607,7 +1612,7 @@ private struct SidebarRow: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: symbol)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.shelfControlTitle)
                     .foregroundStyle(isSelected ? tint : .secondary)
                     .frame(width: 18)
                     .accessibilityHidden(true)
@@ -1620,7 +1625,7 @@ private struct SidebarRow: View {
                 Spacer(minLength: 4)
 
                 Text("\(count)")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .font(.shelfCount)
                     .foregroundStyle(isHighlighted ? .primary : .tertiary)
             }
             .padding(.horizontal, 10)
@@ -1668,7 +1673,7 @@ private struct ToolRow: View {
                     .frame(width: 18)
                     .accessibilityHidden(true)
                 Text(tool.title)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.shelfBody)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Image(systemName: "arrow.up.right")
@@ -1686,7 +1691,7 @@ private struct ToolRow: View {
         .help(L10n.shared.t("打开") + " \(tool.title)")
         .draggable(ShelfDragItem.quickTool(tool.id)) {
             Label(tool.title, systemImage: "square.dashed")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.shelfLabel)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
         }
@@ -1696,7 +1701,7 @@ private struct ToolRow: View {
     private var toolIcon: some View {
         if let symbol = tool.symbol {
             Image(systemName: symbol)
-                .font(.system(size: 12, weight: .medium))
+                .font(.shelfBody)
                 .foregroundStyle(.secondary)
         } else if let path = tool.path {
             Image(nsImage: IconCache.shared.image(for: path))
@@ -1732,10 +1737,10 @@ private struct RemoveFromGroupStrip: View {
             if isVisible {
                 HStack(spacing: 8) {
                     Image(systemName: "trash")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.shelfSectionTitle)
                         .accessibilityHidden(true)
                     L10nText("拖到这里，从该分组移除")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.shelfControlTitle)
                 }
                 .foregroundStyle(isTargeted ? Color.white : AppShelfPalette.danger)
                 .frame(maxWidth: .infinity)
@@ -2134,6 +2139,7 @@ private struct AppCard: View {
 
 /// Caches app icons. `NSWorkspace.icon(forFile:)` goes through Launch Services, and
 /// calling it for every card on every redraw is what made dragging feel sluggish.
+@MainActor
 final class IconCache {
     static let shared = IconCache()
 
@@ -2179,11 +2185,11 @@ private struct QuickToolsRow: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 L10nText("快捷工具")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.shelfControlTitle)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text(isTargeted ? L10n.shared.t("松手即可添加") : L10n.shared.t("拖应用进来添加，拖出去移除"))
-                    .font(.system(size: 11))
+                    .font(.shelfMeta)
                     .foregroundStyle(isTargeted ? AppShelfPalette.accent : Color.secondary.opacity(0.7))
             }
 
@@ -2249,10 +2255,10 @@ private struct QuickToolTile: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(tool.title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.shelfLabel)
                         .foregroundStyle(.primary)
                     L10nText("打开")
-                        .font(.system(size: 10))
+                        .font(.shelfMicro)
                         .foregroundStyle(.tertiary)
                 }
 
@@ -2277,7 +2283,7 @@ private struct QuickToolTile: View {
         // Drag the tile out of the row to remove it.
         .draggable(ShelfDragItem.quickTool(tool.id)) {
             Label(tool.title, systemImage: "square.dashed")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.shelfLabel)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
         }
@@ -2335,7 +2341,7 @@ private struct EmptyState: View {
                 .font(.system(size: 16, weight: .semibold))
 
             Text(subheadline)
-                .font(.system(size: 12))
+                .font(.shelfCaption)
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
@@ -2422,9 +2428,9 @@ struct GroupEditorSheet: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(existing == nil ? L10n.shared.t("新建分组") : L10n.shared.t("编辑分组"))
-                        .font(.system(size: 20, weight: .semibold, design: .rounded))
+                        .font(.shelfSheetTitle)
                     L10nText("给分组一个容易辨认的名称和图标")
-                        .font(.system(size: 12))
+                        .font(.shelfCaption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -2432,7 +2438,7 @@ struct GroupEditorSheet: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 L10nText("名称")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.shelfLabel)
                 TextField(L10n.shared.t("例如：项目、影音、常用"), text: $name)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel(L10n.shared.t("名称"))
@@ -2440,13 +2446,13 @@ struct GroupEditorSheet: View {
 
             VStack(alignment: .leading, spacing: 9) {
                 L10nText("图标")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.shelfLabel)
 
                 // The catalogue is long enough that a fixed grid without a filter was
                 // unusable once the wanted symbol was not among the first fifteen.
                 TextField(L10n.shared.t("搜索图标"), text: $symbolFilter)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12))
+                    .font(.shelfCaption)
                     .accessibilityLabel(L10n.shared.t("搜索图标"))
 
                 ScrollView {
@@ -2457,7 +2463,7 @@ struct GroupEditorSheet: View {
                                 selectedSymbol = symbol
                             } label: {
                                 Image(systemName: symbol)
-                                    .font(.system(size: 14, weight: .semibold))
+                                    .font(.shelfSectionTitle)
                                     .foregroundStyle(selectedSymbol == symbol ? color : .secondary)
                                     .frame(width: 31, height: 31)
                                     .background {
@@ -2481,7 +2487,7 @@ struct GroupEditorSheet: View {
             }
 
             ColorPicker(L10n.shared.t("颜色"), selection: $color, supportsOpacity: false)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.shelfLabel)
 
             HStack {
                 Spacer()
@@ -2532,9 +2538,9 @@ struct AddAppsSheet: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 L10nText("添加到应用架")
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .font(.shelfSheetTitle)
                 Text(L10n.shared.t("已选择 个应用", args: ["count": "\(urls.count)"]))
-                    .font(.system(size: 12))
+                    .font(.shelfCaption)
                     .foregroundStyle(.secondary)
             }
 
@@ -2547,7 +2553,7 @@ struct AddAppsSheet: View {
                                 .frame(width: 28, height: 28)
                                 .accessibilityHidden(true)
                             Text(url.deletingPathExtension().lastPathComponent)
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.shelfBody)
                                 .lineLimit(1)
                             Spacer()
                         }
@@ -2614,7 +2620,7 @@ struct MoveAppSheet: View {
                     L10nText("加入其他分组")
                         .font(.system(size: 18, weight: .semibold, design: .rounded))
                     Text(app.name)
-                        .font(.system(size: 12))
+                        .font(.shelfCaption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }

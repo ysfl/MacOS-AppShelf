@@ -6,6 +6,7 @@ import Combine
 import AppShelfCore
 
 /// Controls the app-wide appearance: follow the OS, force light, or force dark.
+@MainActor
 final class Appearance: ObservableObject {
     static let shared = Appearance()
 

@@ -32,5 +32,5 @@ let package = Package(
             path: "Tests/AppShelfCoreTests"
         )
     ],
-    swiftLanguageModes: [.v5]
+    swiftLanguageModes: [.v6]
 )

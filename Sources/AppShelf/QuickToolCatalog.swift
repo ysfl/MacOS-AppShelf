@@ -13,16 +13,6 @@ enum QuickTool: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: String {
-        switch self {
-        case .calculator: return L10n.shared.t("计算器")
-        case .terminal: return L10n.shared.t("终端")
-        case .activityMonitor: return L10n.shared.t("活动监视器")
-        case .screenshot: return L10n.shared.t("截图")
-        case .systemSettings: return L10n.shared.t("系统设置")
-        }
-    }
-
     var symbol: String {
         switch self {
         case .calculator: return "plus.forwardslash.minus"
@@ -58,6 +48,20 @@ enum QuickTool: String, CaseIterable, Identifiable {
             ]
         case .systemSettings:
             return ["/System/Applications/System Settings.app"]
+        }
+    }
+}
+
+extension QuickTool {
+    /// Isolated to the main actor rather than the whole enum: it resolves through the live
+    /// translation table, while the type's `Identifiable` conformance stays nonisolated.
+    @MainActor var title: String {
+        switch self {
+        case .calculator: return L10n.shared.t("计算器")
+        case .terminal: return L10n.shared.t("终端")
+        case .activityMonitor: return L10n.shared.t("活动监视器")
+        case .screenshot: return L10n.shared.t("截图")
+        case .systemSettings: return L10n.shared.t("系统设置")
         }
     }
 }

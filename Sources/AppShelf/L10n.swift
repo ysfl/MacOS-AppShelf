@@ -14,6 +14,7 @@ import AppShelfCore
 ///
 /// Lookup and language resolution are delegated to `LocalizationResolver`, which is pure
 /// and unit-tested; this class only owns the loaded tables and the change notification.
+@MainActor
 final class L10n: ObservableObject {
     static let shared = L10n()
 

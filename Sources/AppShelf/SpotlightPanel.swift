@@ -319,7 +319,7 @@ struct SpotlightView: View {
                 .onSubmit { controller.openSelected() }
 
             Text(controller.shortcutHint)
-                .font(.system(size: 11, weight: .medium))
+                .font(.shelfNote)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
@@ -365,9 +365,9 @@ struct SpotlightView: View {
     private var noResults: some View {
         VStack(spacing: 6) {
             L10nText("没有匹配的应用")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.shelfControlTitle)
             L10nText("试试应用名、拼音全拼或首字母，例如“wx”")
-                .font(.system(size: 11))
+                .font(.shelfMeta)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, minHeight: 76)
@@ -396,7 +396,7 @@ struct SpotlightView: View {
                 .padding(.vertical, 2)
                 .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
             Text(title)
-                .font(.system(size: 10))
+                .font(.shelfMicro)
                 .foregroundStyle(.secondary)
         }
     }
@@ -443,7 +443,7 @@ private struct SpotlightRow: View {
 
                 if isSelected {
                     Image(systemName: "return")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.shelfLabel)
                         .foregroundStyle(.secondary)
                 }
             }

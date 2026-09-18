@@ -5,22 +5,33 @@ import UniformTypeIdentifiers
 import AppShelfCore
 
 /// Captures a key combination while the settings window is key.
+@MainActor
 final class ShortcutRecorderCoordinator {
     private var monitor: Any?
 
     /// Starts recording. `onResult` receives `nil` when the user cancels with Escape.
-    func start(onResult: @escaping (HotKey?) -> Void) {
+    ///
+    /// The monitor hands us a `@Sendable` closure on an arbitrary thread and `NSEvent` is
+    /// not `Sendable`, so the event is reduced to plain values before the hop instead of
+    /// being carried across it. The callback is promised back on the main actor.
+    func start(onResult: @escaping @MainActor @Sendable (HotKey?) -> Void) {
         stop()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
-            if Int(event.keyCode) == 53 {
-                DispatchQueue.main.async { onResult(nil) }
-                return nil
-            }
-            // A bare letter would be indistinguishable from normal typing, so require a modifier.
+            let keyCode = event.keyCode
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-            guard !modifiers.isEmpty else { return nil }
-            let shortcut = HotKey(event: event)
-            DispatchQueue.main.async { onResult(shortcut) }
+            let characters = event.charactersIgnoringModifiers ?? ""
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if Int(keyCode) == 53 {
+                        onResult(nil)
+                        return
+                    }
+                    // A bare letter would be indistinguishable from normal typing, so require a modifier.
+                    guard !modifiers.isEmpty else { return }
+                    onResult(HotKey(keyCode: keyCode, cocoaModifiers: modifiers, characters: characters))
+                }
+            }
+            // Every key press is consumed while recording; the recorder owns the keyboard.
             return nil
         }
     }
@@ -72,11 +83,11 @@ struct ShortcutRecorderView: View {
 
             if let message {
                 Text(message)
-                    .font(.system(size: 11))
+                    .font(.shelfMeta)
                     .foregroundStyle(.secondary)
             } else if isRecording {
                 Text(L10n.shared.t("请按住 ⌘ / ⌥ / ⌃ / ⇧ 中的至少一个，esc 取消"))
-                    .font(.system(size: 11))
+                    .font(.shelfMeta)
                     .foregroundStyle(.secondary)
             }
         }
@@ -90,12 +101,12 @@ struct ShortcutRecorderView: View {
         return shortcut.isEnabled ? shortcut.display : L10n.shared.t("未设置")
     }
 
-    private func stopRecording() {
+    @MainActor private func stopRecording() {
         coordinator.stop()
         isRecording = false
     }
 
-    private func toggleRecording() {
+    @MainActor private func toggleRecording() {
         if isRecording {
             stopRecording()
             return
@@ -207,7 +218,7 @@ struct SettingsView: View {
             L10nText("设置")
                 .font(.system(size: 22, weight: .semibold, design: .rounded))
             L10nText("快捷键、菜单栏图标和应用占用统计")
-                .font(.system(size: 12))
+                .font(.shelfCaption)
                 .foregroundStyle(.secondary)
         }
     }
@@ -216,14 +227,14 @@ struct SettingsView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 L10nText("聚焦搜索快捷键")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.shelfLabel)
                 ShortcutRecorderView(shortcut: $hotKeys.shortcut)
                 L10nText("按下这个组合键会在任何应用中唤出搜索框，输入后回车即可打开应用。")
-                    .font(.system(size: 11))
+                    .font(.shelfMeta)
                     .foregroundStyle(.secondary)
                 if hotKeys.registrationFailed {
                     L10nText("系统没有接受这个组合键，可能被其他应用占用了，换一个试试。")
-                        .font(.system(size: 11))
+                        .font(.shelfMeta)
                         .foregroundStyle(AppShelfPalette.danger)
                 }
             }
@@ -237,9 +248,9 @@ struct SettingsView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 Toggle(L10n.shared.t("显示菜单栏图标"), isOn: $hotKeys.showsStatusItem)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.shelfLabel)
                 L10nText("菜单栏图标可以打开搜索框、应用架窗口和本设置面板。")
-                    .font(.system(size: 11))
+                    .font(.shelfMeta)
                     .foregroundStyle(.secondary)
             }
             .padding(6)
@@ -259,7 +270,7 @@ struct SettingsView: View {
                             .accessibilityHidden(true)
 
                         Text(item.title)
-                            .font(.system(size: 12))
+                            .font(.shelfCaption)
                             .lineLimit(1)
 
                         Spacer(minLength: 0)
@@ -295,7 +306,7 @@ struct SettingsView: View {
 
                 if quickTools.items.isEmpty {
                     L10nText("还没有显示任何快捷工具")
-                        .font(.system(size: 11))
+                        .font(.shelfMeta)
                         .foregroundStyle(.secondary)
                 }
 
@@ -303,12 +314,12 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     L10nText("添加或隐藏")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.shelfLabel)
 
                     ForEach(hiddenTools) { item in
                         HStack(spacing: 8) {
                             Text(item.title)
-                                .font(.system(size: 12))
+                                .font(.shelfCaption)
                                 .lineLimit(1)
                             Spacer(minLength: 0)
                             Button(L10n.shared.t("显示")) {
@@ -334,7 +345,7 @@ struct SettingsView: View {
                 }
 
                 L10nText("快捷工具显示在侧边栏和“全部应用”顶部；可以把常用应用加进来。")
-                    .font(.system(size: 11))
+                    .font(.shelfMeta)
                     .foregroundStyle(.secondary)
             }
             .padding(6)
@@ -361,12 +372,12 @@ struct SettingsView: View {
                 if metrics.pendingMeasurements > 0 {
                     L10nText("recalculate_progress",
                              args: ["count": "\(metrics.pendingMeasurements)"])
-                        .font(.system(size: 11))
+                        .font(.shelfMeta)
                         .foregroundStyle(.secondary)
                 }
 
                 L10nText("占用量在后台测量并缓存。更新或卸载应用后可以重新计算一次。")
-                    .font(.system(size: 11))
+                    .font(.shelfMeta)
                     .foregroundStyle(.secondary)
             }
             .padding(6)
@@ -406,7 +417,7 @@ struct SettingsView: View {
                         .textSelection(.enabled)
                         .foregroundStyle(.secondary)
                     L10nText("external_localization_hint")
-                        .font(.system(size: 11))
+                        .font(.shelfMeta)
                         .foregroundStyle(.secondary)
                 }
 
@@ -418,7 +429,7 @@ struct SettingsView: View {
                     }
                     Text(L10n.shared.t("external_language_count",
                                        args: ["count": "\(l10n.externalLanguageCount)"]))
-                        .font(.system(size: 11))
+                        .font(.shelfMeta)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -437,12 +448,12 @@ struct SettingsView: View {
                 }
                 if let importReport {
                     Text(importReport)
-                        .font(.system(size: 11))
+                        .font(.shelfMeta)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
                 L10nText("data_scope_hint")
-                    .font(.system(size: 11))
+                    .font(.shelfMeta)
                     .foregroundStyle(.secondary)
             }
             .padding(6)
@@ -455,7 +466,7 @@ struct SettingsView: View {
     private func toolGlyph(for item: QuickToolItem) -> some View {
         if let symbol = item.symbol {
             Image(systemName: symbol)
-                .font(.system(size: 12, weight: .medium))
+                .font(.shelfBody)
                 .foregroundStyle(.secondary)
         } else if let path = item.path {
             Image(nsImage: IconCache.shared.image(for: path))
@@ -464,7 +475,7 @@ struct SettingsView: View {
                 .frame(width: 16, height: 16)
         } else {
             Image(systemName: "app.dashed")
-                .font(.system(size: 12, weight: .medium))
+                .font(.shelfBody)
                 .foregroundStyle(.secondary)
         }
     }

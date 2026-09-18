@@ -8,17 +8,20 @@ import AppShelfCore
 typealias HotKey = AppShelfCore.HotKey
 
 extension HotKey {
-    /// Builds a shortcut from the key event the recorder captured.
-    init(event: NSEvent) {
-        let modifiers = KeyModifiers(cocoaFlags: event.modifierFlags.intersection([.command, .option, .control, .shift]))
-        let characters = event.charactersIgnoringModifiers ?? ""
-        let label = HotKeyDisplay.string(modifiers: modifiers,
-                                         keyCode: event.keyCode,
-                                         characters: characters,
-                                         unknownKeyLabel: { L10n.shared.t("key_code", args: ["n": "\($0)"]) })
-        self.init(keyCode: UInt32(event.keyCode),
+    /// Builds a shortcut from the plain values the recorder extracted out of its key event.
+    ///
+    /// Takes the pieces rather than the `NSEvent`: the event is not `Sendable`, and the
+    /// recorder reaches this from a main-actor hop. Main-actor isolated because the
+    /// fallback key label resolves through the translation table.
+    @MainActor
+    init(keyCode: UInt16, cocoaModifiers: NSEvent.ModifierFlags, characters: String) {
+        let modifiers = KeyModifiers(cocoaFlags: cocoaModifiers)
+        self.init(keyCode: UInt32(keyCode),
                   carbonModifiers: modifiers.carbonMask,
-                  display: label)
+                  display: HotKeyDisplay.string(modifiers: modifiers,
+                                                keyCode: keyCode,
+                                                characters: characters,
+                                                unknownKeyLabel: { L10n.shared.t("key_code", args: ["n": "\($0)"]) }))
     }
 }
 
@@ -35,6 +38,7 @@ extension KeyModifiers {
 }
 
 /// Registers the hotkey with Carbon so the panel can be opened from any app.
+@MainActor
 final class HotKeyCenter {
     static let shared = HotKeyCenter()
 
@@ -98,6 +102,7 @@ final class HotKeyCenter {
 }
 
 /// Persists the shortcut and the menu-bar preference so both scenes read the same values.
+@MainActor
 final class HotKeyStore: ObservableObject {
     static let shared = HotKeyStore()
 

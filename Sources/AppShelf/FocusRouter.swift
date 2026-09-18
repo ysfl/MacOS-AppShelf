@@ -6,6 +6,7 @@ import Foundation
 /// `.commands` is declared on the `App`, which has no access to a window's `@FocusState`.
 /// Bumping a token here is the smallest bridge that does not require a third-party
 /// focus library, and it keeps ⌘F working whichever window is frontmost.
+@MainActor
 final class FocusRouter: ObservableObject {
     static let shared = FocusRouter()
 

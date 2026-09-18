@@ -15,13 +15,6 @@ enum QuickToolItem: Identifiable, Hashable {
         }
     }
 
-    var title: String {
-        switch self {
-        case .builtin(let tool): return tool.title
-        case .custom(let tool): return tool.name
-        }
-    }
-
     /// Built-ins use an SF Symbol; custom tools fall back to their own app icon.
     var symbol: String? {
         switch self {
@@ -43,7 +36,18 @@ enum QuickToolItem: Identifiable, Hashable {
     }
 }
 
+extension QuickToolItem {
+    /// Main-actor isolated because the built-in case reads the translation table.
+    @MainActor var title: String {
+        switch self {
+        case .builtin(let tool): return tool.title
+        case .custom(let tool): return tool.name
+        }
+    }
+}
+
 /// Persists which quick tools are visible, in which order, and which apps were added.
+@MainActor
 final class QuickToolStore: ObservableObject {
     static let shared = QuickToolStore()
 

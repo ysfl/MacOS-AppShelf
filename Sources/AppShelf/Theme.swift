@@ -96,3 +96,33 @@ extension AppGroup {
     /// The group's tint, decoded from the hex string the picker persists.
     var color: Color { Color(hex: colorHex) }
 }
+
+/// Named text roles for the styles that repeat often enough to be a system.
+///
+/// The grid still carries one-off sizes where a specific optical result was chosen
+/// (a 31 pt empty-state glyph, a 9 pt arrow). Those are deliberate, not drift. What this
+/// exists to stop is *new* ad-hoc sizes creeping in for roles that already have a name,
+/// which `Scripts/gates/gates.py` enforces as a ratchet: the count of un-named
+/// `.font(.system(size:` call sites may go down, never up.
+extension Font {
+    /// Sidebar and card metadata: counts, timestamps, quiet labels.
+    static let shelfMeta = Font.system(size: 11)
+    /// Small headings and control titles.
+    static let shelfLabel = Font.system(size: 12, weight: .semibold)
+    /// Default running text in lists and panels.
+    static let shelfCaption = Font.system(size: 12)
+    /// Group and section headings.
+    static let shelfSectionTitle = Font.system(size: 14, weight: .semibold)
+    /// Rows that need a touch more emphasis than `shelfCaption`.
+    static let shelfBody = Font.system(size: 12, weight: .medium)
+    /// Secondary notes under a heading.
+    static let shelfNote = Font.system(size: 11, weight: .medium)
+    /// Buttons and toolbar titles.
+    static let shelfControlTitle = Font.system(size: 13, weight: .semibold)
+    /// The smallest readable tier: badges, hints under icons.
+    static let shelfMicro = Font.system(size: 10)
+    /// Numerals that must stay column-aligned as values change.
+    static let shelfCount = Font.system(size: 11, weight: .medium, design: .monospaced)
+    /// Sheet and panel headings.
+    static let shelfSheetTitle = Font.system(size: 20, weight: .semibold, design: .rounded)
+}
