@@ -40,6 +40,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         updateStatusItem()
+        installDragSafetyNets()
+    }
+
+    // MARK: - Drag state safety nets
+
+    /// Nothing about a drag is guaranteed to report back: it can be cancelled with Esc,
+    /// released over empty space, or triggered by a stray few pixels of movement and then
+    /// abandoned. Any of those used to leave every delete strip and outline stuck on
+    /// screen. These watch for the events that mean "the drag is definitely over".
+    private func installDragSafetyNets() {
+        NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { event in
+            DispatchQueue.main.async { DragActivity.shared.endAfterRelease() }
+            return event
+        }
+
+        // During a real drag the session owns the input, so a wheel event reaching the
+        // window means no drag is in flight — which is exactly the stuck case.
+        NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            if DragActivity.shared.isActive {
+                DispatchQueue.main.async { DragActivity.shared.end() }
+            }
+            return event
+        }
+
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // 53 is Escape.
+            guard event.keyCode == 53 else { return event }
+            DispatchQueue.main.async { self?.handleEscape() }
+            return event
+        }
+    }
+
+    /// Escape leaves whatever the user is in the middle of, most specific first.
+    private func handleEscape() {
+        // The floating search panel dismisses itself.
+        if searchPanel?.isVisible == true { return }
+
+        if let store, !store.query.isEmpty {
+            store.query = ""
+            return
+        }
+
+        // Otherwise abandon a drag that is still being reported as active.
+        DragActivity.shared.end()
     }
 
     // MARK: - Dock menu

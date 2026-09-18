@@ -107,6 +107,14 @@ final class DragReflow: ObservableObject {
     }
 }
 
+private extension View {
+    /// Applies `transform` only when `condition` holds, without forcing both branches
+    /// into one type.
+    @ViewBuilder func when<Content: View>(_ condition: Bool, _ transform: (Self) -> Content) -> some View {
+        if condition { transform(self) } else { self }
+    }
+}
+
 /// Reports the grid's own size without taking part in layout.
 private struct GridSizeKey: PreferenceKey {
     static var defaultValue: CGSize = .zero
@@ -125,11 +133,13 @@ final class DragActivity: ObservableObject {
     @Published private(set) var sourcePath: String?
 
     private var endWork: DispatchWorkItem?
+    private var safetyWork: DispatchWorkItem?
 
     func begin() {
         endWork?.cancel()
         endWork = nil
         if !isActive { isActive = true }
+        scheduleSafetyNet()
     }
 
     func begin(path: String) {
@@ -137,10 +147,31 @@ final class DragActivity: ObservableObject {
         sourcePath = path
     }
 
+    /// Last-resort reset. A drag that is cancelled with Esc, released over nothing, or
+    /// never started properly never reaches a drop handler, and the delete strips and
+    /// outlines would otherwise stay on screen until the app was restarted.
+    private func scheduleSafetyNet() {
+        safetyWork?.cancel()
+        let work = DispatchWorkItem { self.end() }
+        safetyWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: work)
+    }
+
+    /// Called from a mouse release: if no drop handler has run by the time this fires,
+    /// the drag was abandoned and the state has to go.
+    func endAfterRelease() {
+        endWork?.cancel()
+        let work = DispatchWorkItem { self.end() }
+        endWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
     /// Called as soon as a drop has been handled.
     func end() {
         endWork?.cancel()
         endWork = nil
+        safetyWork?.cancel()
+        safetyWork = nil
         isActive = false
         sourcePath = nil
         DragReflow.shared.clear()
@@ -556,7 +587,15 @@ struct ContentView: View {
         .onAppear { focusSearchField() }
         // Every page change hands the keyboard back to the search field.
         .onChange(of: store.selection, initial: false) { _, _ in
+            // A drag cannot survive a page change, so drop any leftover state here too:
+            // otherwise the strips and outlines reappear on the new page.
+            DragActivity.shared.end()
             focusSearchField()
+        }
+        // Same for the search field itself: leaving a query can strand a drag started
+        // over the old results.
+        .onChange(of: store.query, initial: false) { _, _ in
+            DragActivity.shared.end()
         }
     }
 
@@ -954,20 +993,26 @@ struct ContentView: View {
         )
         // The bundle path is the drag payload: dropping on a sidebar group files the app,
         // dropping on another card inside a section reorders it.
-        .draggable(ShelfDragItem.app(app.path)) {
-            // The whole card follows the cursor, so there is no icon drifting away
-            // from the tile it belongs to.
-            AppCardTile(app: app, showsCategory: sectionGroupID == nil, width: 152)
-                .background(AppShelfPalette.panel, in: RoundedRectangle(cornerRadius: 12))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-                }
-                // The preview is only built once the drag actually starts, so this is the
-                // earliest reliable "this app is the one being carried" signal. Knowing it
-                // before any hover keeps a drag from another block from being mistaken
-                // for a reorder inside this one.
-                .onAppear { highlight.beginAppDrag(path: app.path) }
+        //
+        // Search results are not draggable: they are ranked, so there is no stable
+        // position to reorder, and starting a drag there and abandoning it was the most
+        // reliable way to leave the whole grid stuck showing drag affordances.
+        .when(store.query.isEmpty) { view in
+            view.draggable(ShelfDragItem.app(app.path)) {
+                // The whole card follows the cursor, so there is no icon drifting away
+                // from the tile it belongs to.
+                AppCardTile(app: app, showsCategory: sectionGroupID == nil, width: 152)
+                    .background(AppShelfPalette.panel, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                    }
+                    // The preview is only built once the drag actually starts, so this is
+                    // the earliest reliable "this app is the one being carried" signal.
+                    // Knowing it before any hover keeps a drag from another block from
+                    // being mistaken for a reorder inside this one.
+                    .onAppear { highlight.beginAppDrag(path: app.path) }
+            }
         }
 
         if let sectionGroupID {
