@@ -414,6 +414,8 @@ private struct AppSection: Identifiable {
 struct ContentView: View {
     @ObservedObject var store: LauncherStore
     @ObservedObject private var quickTools = QuickToolStore.shared
+    /// Observed so a density change in Settings re-renders the grid and re-measures slides.
+    @ObservedObject private var layout = LayoutPreferences.shared
 
     @FocusState private var isSearchFocused: Bool
     // Highlight state is kept outside the view so drag hovers do not rebuild the grid.
@@ -1902,7 +1904,7 @@ struct AppCardTile: View {
         let tile = VStack(spacing: 9) {
             ZStack(alignment: .topTrailing) {
                 AppIconView(path: app.path)
-                    .frame(width: 84, height: 84)
+                    .frame(width: ShelfGrid.iconSide, height: ShelfGrid.iconSide)
                     .accessibilityHidden(true)
 
                 if app.isRunning {

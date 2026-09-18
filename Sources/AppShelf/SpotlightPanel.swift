@@ -45,11 +45,14 @@ final class SpotlightController: ObservableObject {
 
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
-            // With an empty query the panel doubles as a quick switcher: running apps first.
-            results = Array(store.apps.sorted { lhs, rhs in
-                if lhs.isRunning != rhs.isRunning { return lhs.isRunning }
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-            }.prefix(20))
+            // With an empty query the panel doubles as a quick switcher: what is running,
+            // then what the user launches most, then most recently used, then alphabetical.
+            let visible = store.hidden.filtering(store.apps)
+            results = Array(UsageRanking.sorted(
+                visible,
+                counts: { UsageRecorder.shared.count(for: $0.path) },
+                lastUsed: { UsageRecorder.shared.lastUsed(for: $0.path) }
+            ).prefix(20))
         } else {
             results = Array(store.searchResults(for: trimmed, limit: Self.resultLimit))
         }

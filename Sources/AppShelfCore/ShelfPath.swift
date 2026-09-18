@@ -28,6 +28,8 @@ public enum ShelfDefaults {
     public static let language = "AppShelf.language"
     public static let appearance = "AppShelf.appearance"
     public static let quickToolsEnabled = "AppShelf.quickTools.enabled.v1"
+    public static let gridDensity = "AppShelf.gridDensity.v1"
+    public static let usage = "AppShelf.usage.v1"
     public static let quickToolsCustom = "AppShelf.quickTools.custom.v1"
     /// Obsolete formats that must be removed on launch, never written again.
     public static let retired = ["AppShelf.sizeCache.v1"]

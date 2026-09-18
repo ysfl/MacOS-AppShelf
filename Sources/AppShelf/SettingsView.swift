@@ -173,6 +173,8 @@ struct SettingsView: View {
     @ObservedObject private var quickTools = QuickToolStore.shared
     @ObservedObject private var metrics = AppMetrics.shared
     @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var layout = LayoutPreferences.shared
+    @ObservedObject private var launchAtLogin = LaunchAtLogin.shared
 
     /// Polled while a recalculation is running so the panel can show it winding down.
     private let progressTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -195,6 +197,7 @@ struct SettingsView: View {
 
                 shortcutBox
                 statusBarBox
+                appearanceBox
                 quickToolsBox
                 usageBox
                 languageBox
@@ -256,6 +259,49 @@ struct SettingsView: View {
             .padding(6)
         } label: {
             L10nText("菜单栏")
+        }
+    }
+
+    /// Density, and whether the shelf should come back at sign-in.
+    private var appearanceBox: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Picker(selection: $layout.density) {
+                    ForEach(GridDensity.allCases, id: \.self) { density in
+                        L10nText(density.titleKey)
+                    }
+                } label: {
+                    L10nText("卡片密度")
+                }
+                .pickerStyle(.segmented)
+
+                L10nText("密度改变图标大小与每行数量，拖动时的让位距离会一起跟着变。")
+                    .font(.shelfNote)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                Toggle(isOn: Binding(get: { launchAtLogin.isEnabled },
+                                     set: { launchAtLogin.setEnabled($0) })) {
+                    L10nText("登录时启动应用架")
+                }
+                .font(.system(size: 12, weight: .semibold))
+
+                if let error = launchAtLogin.lastError {
+                    // A refused registration has to be visible: a toggle that silently
+                    // reverts is worse than one that says it did not take.
+                    Text(L10n.shared.t("login_item_failed", args: ["reason": error]))
+                        .font(.shelfNote)
+                        .foregroundStyle(AppShelfPalette.danger)
+                } else {
+                    L10nText("登录后应用架会在后台待命，快捷键和菜单栏图标立即可用。")
+                        .font(.shelfNote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(6)
+        } label: {
+            L10nText("界面与启动")
         }
     }
 

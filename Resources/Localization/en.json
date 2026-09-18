@@ -167,5 +167,16 @@
   "import_unreadable": "That file is not an AppShelf backup.",
   "import_refused": "This backup could not be imported.",
   "import_version_too_new": "This backup came from AppShelf {found}; this build reads up to {supported}.",
-  "搜索图标": "Search Icons"
+  "搜索图标": "Search Icons",
+  "卡片密度": "Tile Density",
+  "紧凑": "Compact",
+  "标准": "Standard",
+  "宽松": "Roomy",
+  "界面与启动": "Interface and Startup",
+  "密度改变图标大小与每行数量，拖动时的让位距离会一起跟着变。": "Density changes the icon size and how many fit per row; drag slide distances follow it.",
+  "登录时启动应用架": "Launch AppShelf at sign-in",
+  "登录后应用架会在后台待命，快捷键和菜单栏图标立即可用。": "AppShelf stays resident after sign-in, so the shortcut and the menu bar icon are ready at once.",
+  "login_item_failed": "macOS did not accept this: {reason}",
+  "清除使用记录": "Clear Usage History",
+  "使用记录只用于在同样相关的结果之间排序，以及浮层空白时的最近列表。": "Usage only orders results the score cannot separate, and fills the panel's list when the query is empty."
 }

@@ -36,21 +36,19 @@ enum AppShelfPalette {
 
 /// The one definition of the app grid.
 ///
-/// The `GridItem` array and the geometry used to slide a tile both come from here, so the
-/// column step can no longer disagree with what the grid actually laid out.
+/// The `GridItem` array, the slide geometry and the card metrics all read the same
+/// density, so a change in Settings moves the whole grid together instead of desynchronising
+/// the layout from the transform that slides tiles during a drag.
+@MainActor
 enum ShelfGrid {
-    static let spec = GridMetricsSpec.standard
+    private static var preferences: LayoutPreferences { .shared }
 
-    static var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: CGFloat(spec.minimum), maximum: CGFloat(spec.maximum)),
-                  spacing: CGFloat(spec.columnSpacing))]
-    }
-
-    static var rowSpacing: CGFloat { CGFloat(spec.rowSpacing) }
-    static var columnSpacing: CGFloat { CGFloat(spec.columnSpacing) }
-
-    /// Shortest measure of the grid rows, so `GridGeometry` never divides by a zero height.
-    static let minimumRowHeight: CGFloat = 158
+    static var spec: GridMetricsSpec { preferences.density.spec }
+    static var columns: [GridItem] { preferences.columns }
+    static var rowSpacing: CGFloat { preferences.rowSpacing }
+    static var columnSpacing: CGFloat { preferences.columnSpacing }
+    static var minimumRowHeight: CGFloat { preferences.minimumRowHeight }
+    static var iconSide: CGFloat { preferences.iconSide }
 }
 
 extension Color {

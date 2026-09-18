@@ -260,7 +260,7 @@ final class LauncherStore: ObservableObject {
         if !trimmedQuery.isEmpty {
             // While searching, relevance order wins over the running-first order below,
             // so the best match for "wx" stays at the top even when another app is running.
-            let ranked = SearchMatcher.ranked(result, query: trimmedQuery, limit: Int.max)
+            let ranked = rankedVisible(result, query: trimmedQuery)
             if runningOnly && selection != .running { return ranked.filter(\.isRunning) }
             return ranked
         }
@@ -281,8 +281,16 @@ final class LauncherStore: ObservableObject {
     }
 
     /// Ranked search across every visible app.
+    ///
+    /// Usage history only breaks ties the score cannot separate, so a frequently launched
+    /// app wins among equally good matches without ever overriding a better match.
     func searchResults(for query: String, limit: Int = 40) -> [AppItem] {
-        SearchMatcher.ranked(visibleApps, query: query, limit: limit)
+        rankedVisible(visibleApps, query: query, limit: limit)
+    }
+
+    private func rankedVisible(_ apps: [AppItem], query: String, limit: Int = Int.max) -> [AppItem] {
+        SearchMatcher.ranked(apps, query: query, limit: limit,
+                             usageCount: { UsageRecorder.shared.count(for: $0.path) })
     }
 
     /// Shows a short confirmation in the footer and clears it a few seconds later.
@@ -395,6 +403,7 @@ final class LauncherStore: ObservableObject {
         if !success {
             errorMessage = L10n.shared.t("cannot_open", args: ["name": app.name])
         } else {
+            UsageRecorder.shared.recordLaunch(path: app.path)
             refreshRunningState()
         }
         return success

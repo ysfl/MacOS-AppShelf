@@ -229,8 +229,15 @@ public enum SearchMatcher {
     /// Ranks `items` for `query`, dropping everything that does not match.
     ///
     /// Extracted from `LauncherStore.searchResults` so the ordering contract — score
-    /// first, running apps break ties, then name — is testable without a store.
-    public static func ranked<Item: RankedApp>(_ items: [Item], query: String, limit: Int) -> [Item] {
+    /// first, running apps break ties, then how often the user launches the app, then
+    /// name — is testable without a store.
+    ///
+    /// `usageCount` defaults to zero, which keeps the ordering purely alphabetical for
+    /// callers that have no usage history.
+    public static func ranked<Item: RankedApp>(_ items: [Item],
+                                               query: String,
+                                               limit: Int,
+                                               usageCount: (Item) -> Int = { _ in 0 }) -> [Item] {
         let scored: [(Item, Int)] = items.compactMap { item in
             guard let score = score(item.searchTokens, query: query) else { return nil }
             return (item, score)
@@ -239,6 +246,8 @@ public enum SearchMatcher {
         let sorted = scored.sorted { lhs, rhs in
             if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
             if lhs.0.isRunning != rhs.0.isRunning { return lhs.0.isRunning }
+            let lhsUses = usageCount(lhs.0), rhsUses = usageCount(rhs.0)
+            if lhsUses != rhsUses { return lhsUses > rhsUses }
             return lhs.0.displayName.localizedCaseInsensitiveCompare(rhs.0.displayName) == .orderedAscending
         }
 
