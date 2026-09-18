@@ -25,18 +25,26 @@ jobs:
       - name: Project gates
         run: python3 Scripts/gates/gates.py all --quiet
 
-      - name: Select a Swift 6 toolchain
+      # AppKit signatures differ between SDKs: the same source is clean on Swift 6.2/6.3
+      # but failed on 6.0. Pick the newest Xcode the image offers and assert a floor, so a
+      # stale image fails with a readable message instead of confusing compiler noise.
+      - name: Select the pinned toolchain
+        env:
+          PIN_SWIFT: "6.2"
         run: |
           set -euo pipefail
-          candidate="$(ls -d /Applications/Xcode_1[6-9]*.app 2>/dev/null | sort | tail -1 || true)"
+          candidate="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -t_ -k2 -V | tail -1 || true)"
           if [ -n "$candidate" ]; then
             sudo xcode-select -s "$candidate/Contents/Developer"
           fi
           swift --version
-          swift --version | grep -q "Swift version 6\." || {
-            echo "A Swift 6 toolchain is required." >&2
+          detected="$(swift --version 2>&1 | sed -nE 's/.*Swift version ([0-9]+\.[0-9]+).*/\1/p')"
+          echo "detected Swift $detected, requiring >= $PIN_SWIFT"
+          printf '%s\n%s\n' "$PIN_SWIFT" "$detected" | sort -C -V || {
+            echo "Toolchain too old: need Swift $PIN_SWIFT, found $detected" >&2
             exit 1
           }
+          echo "toolchain ok"
 
       # The project's own contribution gate is a warning-free build, so CI enforces it
       # rather than relying on whoever remembers the flag.
