@@ -31,13 +31,14 @@
 克隆本仓库后不需要做任何事就能构建；只有与私有工作区共用机器的维护者才需要自建这份清单。
 `Scripts/gates/blocklist.local.example.txt` 是模板。
 
-## 三道拦截
+## 四道拦截
 
 | 层 | 位置 | 覆盖 |
 |---|---|---|
 | 提交 | `.githooks/pre-commit` | 暂存内容的凭据形状、禁入路径、屏蔽词 |
 | 推送 | `.githooks/pre-push` | 全部被跟踪文件重扫一遍 |
 | 远端 | `.github/workflows/ci.yml` | 同样的检查，不依赖本地钩子被装上 |
+| 打包 | `Scripts/build-release.sh` | 构建产物内部，见下 |
 
 本地钩子能被 `--no-verify` 绕过，所以 CI 那一层是必需的，不是重复。
 
@@ -45,6 +46,21 @@
 
 ## 发布产物也要扫
 
-DMG 里装的是 `.app`，其中 `Info.plist`、`Resources` 下的 JSON 与 `.strings` 都是文本。
-`Scripts/visual-check.sh` 之外的打包前检查会扫构建产物目录；往 `Resources/` 放文件时
-同样受本规范约束。
+DMG 里装的是 `.app`，其中 `Info.plist`、`InfoPlist.strings`、`Resources` 下的 JSON 都是文本，
+用户可以直接打开读。仓库干净不代表产物干净。
+
+`Scripts/build-release.sh` 在写第一字节 DMG **之前**执行：
+
+```sh
+python3 Scripts/gates/scan_products.py dist/AppShelf.app
+```
+
+不通过就拒绝打包。因为发布流水线走的就是这个脚本，本地和 CI 拿到同一道拦截。
+
+模式与屏蔽词来自 `gates.py`，不是第二份定义；单独成文件是因为 `gates.py` 的体量已经钉死在
+595 行，不允许再增长。
+
+这个检查同样读 `blocklist.local.txt`，同样把 warning 当 error；找不到任何可读文本时判红
+而不是判绿——路径写错不该伪装成"扫过了，很干净"。
+
+往 `Resources/` 放文件时同样受本规范约束。

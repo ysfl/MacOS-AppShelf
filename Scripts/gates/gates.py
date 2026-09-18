@@ -47,11 +47,6 @@ def tracked_files() -> list[str]:
     return [line for line in sh("git", "ls-files", "-z").split("\0") if line]
 
 
-def staged_files() -> list[str]:
-    out = sh("git", "diff", "--cached", "--name-only", "--diff-filter=ACMR")
-    return [line for line in out.splitlines() if line]
-
-
 def diff_text(refspec: str = "--cached") -> str:
     """The added lines of a diff, so checks can look at what is new rather than at history."""
     try:
@@ -157,13 +152,6 @@ class Report:
 
     def add(self, severity: str, message: str) -> None:
         self.findings.append((severity, message))
-
-    @property
-    def worst(self) -> str | None:
-        for level in (ERROR, WARNING, INFO):
-            if any(sev == level for sev, _ in self.findings):
-                return level
-        return None
 
 
 # --------------------------------------------------------------------------- checks
@@ -313,6 +301,46 @@ FORBIDDEN_PATH_PATTERNS = [
 ABSOLUTE_HOME = re.compile(r"(?<![\w.])/(?:Users|home)/[A-Za-z0-9._-]{2,}/")
 
 
+def load_blocklist(report: Report) -> list[str]:
+    """Read the gitignored term list, or explain why internal-name screening is off."""
+    blocklist = Path(__file__).resolve().parent / "blocklist.local.txt"
+    if blocklist.exists():
+        needles = [line.strip() for line in blocklist.read_text().splitlines()
+                   if line.strip() and not line.strip().startswith("#")]
+        report.add(INFO, f"local blocklist active: {len(needles)} terms (file is gitignored)")
+        return needles
+    # Informational, not a failure: a clean CI checkout legitimately has no local
+    # blocklist, and making that red would train everyone to ignore the check.
+    report.add(INFO,
+               "no Scripts/gates/blocklist.local.txt, so internal-name screening is off "
+               "for this run. Create it locally if the machine also holds private work.")
+    return []
+
+
+def committer_emails() -> set[str]:
+    try:
+        return {sh("git", "config", "user.email").strip().lower()} - {""}
+    except subprocess.CalledProcessError:
+        return set()
+
+
+def scan_lines(rel: str, content: str, report: Report, needles: list[str],
+               emails: set[str]) -> None:
+    for number, line in enumerate(content.splitlines(), 1):
+        for pattern, label in SECRET_PATTERNS:
+            if pattern.search(line):
+                report.add(ERROR, f"{rel}:{number}: {label}")
+        if ABSOLUTE_HOME.search(line):
+            report.add(ERROR, f"{rel}:{number}: absolute personal path in a public file")
+        lowered = line.lower()
+        for email in emails:
+            if email and email in lowered:
+                report.add(ERROR, f"{rel}:{number}: committer email address")
+        for needle in needles:
+            if needle.lower() in lowered:
+                report.add(ERROR, f"{rel}:{number}: blocked term (see local blocklist)")
+
+
 def check_publication(scope: str) -> Report:
     """Nothing that must stay private may become visible on a public remote.
 
@@ -320,25 +348,8 @@ def check_publication(scope: str) -> Report:
     optional local blocklist. Fails closed: an unreadable tracked file is an error.
     """
     report = Report("publication")
-    blocklist = Path(__file__).resolve().parent / "blocklist.local.txt"
-    needles: list[str] = []
-    if blocklist.exists():
-        needles = [line.strip() for line in blocklist.read_text().splitlines()
-                   if line.strip() and not line.strip().startswith("#")]
-        report.add(INFO, f"local blocklist active: {len(needles)} terms (file is gitignored)")
-    else:
-        # Informational, not a failure: a clean CI checkout legitimately has no local
-        # blocklist, and making that red would train everyone to ignore the check.
-        report.add(INFO,
-                   "no Scripts/gates/blocklist.local.txt, so internal-name screening is off "
-                   "for this run. Create it locally if the machine also holds private work.")
-
-    committer_emails = set()
-    try:
-        committer_emails.add(sh("git", "config", "user.email").strip().lower())
-    except subprocess.CalledProcessError:
-        pass
-    committer_emails.discard("")
+    needles = load_blocklist(report)
+    emails = committer_emails()
 
     for path in tracked_files():
         for pattern, label in FORBIDDEN_PATH_PATTERNS:
@@ -353,19 +364,7 @@ def check_publication(scope: str) -> Report:
         except (OSError, UnicodeDecodeError) as exc:
             report.add(ERROR, f"{path}: cannot scan for publication safety ({exc})")
             continue
-        for number, line in enumerate(content.splitlines(), 1):
-            for pattern, label in SECRET_PATTERNS:
-                if pattern.search(line):
-                    report.add(ERROR, f"{path}:{number}: {label}")
-            if ABSOLUTE_HOME.search(line):
-                report.add(ERROR, f"{path}:{number}: absolute personal path in a public file")
-            lowered = line.lower()
-            for email in committer_emails:
-                if email and email in lowered:
-                    report.add(ERROR, f"{path}:{number}: committer email address")
-            for needle in needles:
-                if needle.lower() in lowered:
-                    report.add(ERROR, f"{path}:{number}: blocked term (see local blocklist)")
+        scan_lines(path, content, report, needles, emails)
 
     if scope in {"staged", "all"}:
         added = diff_text("--cached")
@@ -506,12 +505,34 @@ CHECKS = {
     "traps-ledger": check_ledger,
 }
 
-# Checks whose warnings are escalated by default. `publication` is one: a leak is never a
-# matter of taste, so a warning there is treated as a failure too.
-ALWAYS_ESCALATE = {"publication"}
+# Checks whose warnings are escalated by default: a leak is never a matter of taste.
+ALWAYS_ESCALATE = {"publication", "publication-products"}
 
 
 # --------------------------------------------------------------------------- runner
+
+def print_report(report: Report, escalate_warnings: bool, quiet_info: bool) -> int:
+    """Print one report and return its exit code. Only errors fail; warnings block solely
+    for an escalated check, otherwise a known, dated exemption would stall every release."""
+    blocking = [f for f in report.findings if f[0] == ERROR]
+    warnings = [f for f in report.findings if f[0] == WARNING]
+    if escalate_warnings or report.check in ALWAYS_ESCALATE:
+        blocking += warnings
+        warnings = []
+    shown = [f for f in report.findings if f[0] == INFO]
+
+    status = "FAIL" if blocking else ("warn" if warnings else "ok")
+    print(f"[{status:>4}] {report.check}  ({len(blocking)} error(s), {len(warnings)} warning(s), "
+          f"{report.seconds:.2f}s)")
+    for severity, message in blocking:
+        print(f"        {severity}: {message}")
+    for severity, message in warnings:
+        print(f"        {severity}: {message}")
+    if not quiet_info:
+        for _, message in shown:
+            print(f"        info: {message}")
+    return 1 if blocking else 0
+
 
 def run(scope: str, only: list[str] | None, skip: list[str] | None,
         escalate_warnings: bool, quiet_info: bool) -> int:
@@ -530,29 +551,7 @@ def run(scope: str, only: list[str] | None, skip: list[str] | None,
             report = Report(name)
             report.add(ERROR, f"check itself failed: {type(exc).__name__}: {exc}")
         report.seconds = (dt.datetime.now() - started).total_seconds()
-
-        escalate = escalate_warnings or name in ALWAYS_ESCALATE
-        # Only errors fail. Warnings are shown and counted separately, and become failures
-        # only for a check that is escalated — otherwise a known, dated exemption would
-        # block every release and people would start skipping the gates.
-        blocking = [f for f in report.findings if f[0] == ERROR]
-        warnings = [f for f in report.findings if f[0] == WARNING]
-        if escalate:
-            blocking += warnings
-            warnings = []
-        shown = [f for f in report.findings if f[0] == INFO]
-
-        status = "FAIL" if blocking else ("warn" if warnings else "ok")
-        print(f"[{status:>4}] {name}  ({len(blocking)} error(s), {len(warnings)} warning(s), "
-              f"{report.seconds:.2f}s)")
-        for severity, message in blocking:
-            print(f"        {severity}: {message}")
-        for severity, message in warnings:
-            print(f"        {severity}: {message}")
-        if not quiet_info:
-            for _, message in shown:
-                print(f"        info: {message}")
-        failures += len(blocking)
+        failures += print_report(report, escalate_warnings, quiet_info)
     return 1 if failures else 0
 
 

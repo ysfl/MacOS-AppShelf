@@ -33,6 +33,13 @@ if [ "$BUILT_VERSION" != "$VERSION" ]; then
     exit 1
 fi
 
+# The bundle ships text a user can open — Info.plist, InfoPlist.strings, the localization
+# JSON — so it gets screened with the same rules as the repository before it is packaged.
+python3 "$PROJECT_DIR/Scripts/gates/scan_products.py" "$PROJECT_DIR/dist/AppShelf.app" || {
+    echo "Refusing to package: the build product did not pass the publication scan." >&2
+    exit 1
+}
+
 mkdir -p "$RELEASE_DIR"
 # The Applications symlink makes the DMG usable as a drag-to-install window.
 /usr/bin/ditto "$PROJECT_DIR/dist/AppShelf.app" "$STAGE_DIR/应用架.app"
