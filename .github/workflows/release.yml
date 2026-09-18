@@ -10,7 +10,7 @@ jobs:
     name: Package and publish
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # swift-testing needs a Swift 6 toolchain. Prefer an installed Xcode 16+ on the
       # runner image and fall back to whatever the image defaults to, so the workflow
