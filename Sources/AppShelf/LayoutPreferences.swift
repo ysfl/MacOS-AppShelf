@@ -91,11 +91,17 @@ final class UsageRecorder {
     private let key = ShelfDefaults.usage
 
     private init() {
-        if let data = UserDefaults.standard.data(forKey: key),
-           let saved = try? JSONDecoder().decode([String: Record].self, from: data) {
-            records = saved
-        } else {
-            records = [:]
+        records = [:]
+        guard let data = UserDefaults.standard.data(forKey: key) else { return }
+        do {
+            records = try JSONDecoder().decode([String: Record].self, from: data)
+        } catch {
+            // Unreadable history is dropped, not kept: otherwise it fails again on every
+            // launch and the ranking silently stops working for the rest of the install.
+            ShelfLog.metrics.error(
+                "Usage history was not readable and has been discarded: \(error.localizedDescription, privacy: .public)"
+            )
+            UserDefaults.standard.removeObject(forKey: key)
         }
     }
 

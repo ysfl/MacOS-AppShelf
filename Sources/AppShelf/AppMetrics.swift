@@ -112,10 +112,19 @@ final class AppMetrics: ObservableObject {
         queue.qualityOfService = .utility
         self.queue = queue
 
-        if let data = defaults.data(forKey: ShelfDefaults.sizeCache),
-           let saved = try? JSONDecoder().decode([String: Record].self, from: data) {
-            records = saved
-            sizes = saved.mapValues(\.bytes)
+        // A cache that will not decode is worse than no cache: it fails on every launch
+        // forever, so it is dropped and re-measured rather than left to rot in UserDefaults.
+        if let data = defaults.data(forKey: ShelfDefaults.sizeCache) {
+            do {
+                let saved = try JSONDecoder().decode([String: Record].self, from: data)
+                records = saved
+                sizes = saved.mapValues(\.bytes)
+            } catch {
+                ShelfLog.metrics.error(
+                    "Size cache was not readable and has been discarded: \(error.localizedDescription, privacy: .public)"
+                )
+                defaults.removeObject(forKey: ShelfDefaults.sizeCache)
+            }
         }
         for key in ShelfDefaults.retired {
             defaults.removeObject(forKey: key)
