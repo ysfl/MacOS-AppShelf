@@ -775,6 +775,32 @@ final class LauncherStore: ObservableObject {
         if persist { persistState() }
     }
 
+    /// Places the dragged apps directly behind `target`.
+    ///
+    /// Needed for dragging to the right: "in front of the next tile" is a no-op when the
+    /// dragged app already sits there, which is what forced the user to overshoot a whole
+    /// tile before anything moved.
+    func moveApps(_ draggedPaths: [String], after target: AppItem, in groupID: UUID, persist: Bool = true) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        var list = groups[index].appPaths.map(normalizePath)
+        var didChange = false
+
+        for dragged in draggedPaths.map(normalizePath) {
+            guard dragged != target.path else { continue }
+            list.removeAll { $0 == dragged }
+            if let targetIndex = list.firstIndex(of: target.path) {
+                list.insert(dragged, at: targetIndex + 1)
+            } else {
+                list.append(dragged)
+            }
+            didChange = true
+        }
+
+        guard didChange else { return }
+        groups[index].appPaths = list
+        if persist { persistState() }
+    }
+
     /// Writes group state immediately. Drag reflows reorder without saving, so the
     /// drop handler calls this once the arrangement is final.
     func persistGroups() {

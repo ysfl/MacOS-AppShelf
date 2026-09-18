@@ -118,6 +118,8 @@
   "apps_count": "{count} apps · {running} running",
   "updated_at": "Updated at {time}",
   "language": "Language",
+  "refresh.title": "Rescan all apps?",
+  "refresh.message": "This rescans /Applications, system apps, and ~/Applications, then re-reads running state. With many apps it can take from a few seconds to a minute, during which CPU and disk usage will rise.",
   "language.system": "System",
   "appearance": "Appearance",
   "appearance.system": "System",

@@ -103,6 +103,19 @@ final class DragHighlight: ObservableObject {
         sectionTargetID != nil || sidebarGroupID != nil
     }
 
+    /// Marks the block the cursor is inside.
+    ///
+    /// Deliberately never cleared on leave. Only the container used to report this, so
+    /// crossing the gap between two tiles — where the tile's own drop target takes over
+    /// — dropped it to nil and the outline blinked on every single move. Clearing on
+    /// leave is also order-dependent: a "left tile A" can arrive after "entered tile B"
+    /// and undo it. Entering another block simply moves the marker, and the drag ending
+    /// clears it.
+    func setGroupHover(_ id: UUID?) {
+        guard let id else { return }
+        sectionTargetID = id
+    }
+
     /// Called by every drop destination while the cursor is over it.
     func setHover(_ isTargeted: Bool) {
         if isTargeted {
@@ -333,6 +346,8 @@ struct ContentView: View {
     @State private var urlsToAdd: [URL] = []
     @State private var isShowingAddSheet = false
     @State private var appToMove: AppItem?
+    /// Refresh walks the whole file system, so it asks before starting.
+    @State private var showRefreshConfirm = false
 
     // Running state and memory are cheap to refresh, and a short interval keeps the
     // memory readouts on the cards close to live.
@@ -536,13 +551,22 @@ struct ContentView: View {
             .toggleStyle(.checkbox)
             .help(L10n.shared.t("只显示正在运行的应用"))
 
-            Button(action: store.reload) {
+            // A full discovery pass walks the file system, so it is confirmed first.
+            Button {
+                showRefreshConfirm = true
+            } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 14, weight: .semibold))
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
             .help(L10n.shared.t("刷新应用列表"))
+            .alert(L10n.shared.t("refresh.title"), isPresented: $showRefreshConfirm) {
+                Button(L10n.shared.t("刷新应用列表")) { store.reload() }
+                Button(L10n.shared.t("取消"), role: .cancel) { }
+            } message: {
+                Text(L10n.shared.t("refresh.message"))
+            }
 
             Button(action: chooseApps) {
                 Label {
@@ -703,7 +727,7 @@ struct ContentView: View {
             highlight.endDrag()
             return true
         } isTargeted: { isTargeted in
-            highlight.sectionTargetID = isTargeted ? section.groupID : nil
+            highlight.setGroupHover(isTargeted ? section.groupID : nil)
             highlight.setHover(isTargeted)
         }
     }
@@ -711,16 +735,19 @@ struct ContentView: View {
     /// The short hint next to a section heading, kept separate for the same reason.
     private struct SectionDropHint: View {
         @ObservedObject private var highlight = DragHighlight.shared
+        @ObservedObject private var activity = DragActivity.shared
         let groupID: UUID?
 
         var body: some View {
-            Text(highlight.sectionTargetID == groupID ? L10n.shared.t("放到这里") : L10n.shared.t("拖动标题或卡片可调整顺序"))
+            Text(isTarget ? L10n.shared.t("放到这里") : L10n.shared.t("拖动标题或卡片可调整顺序"))
                 .font(.system(size: 10))
                 .foregroundStyle(
-                    highlight.sectionTargetID == groupID
-                        ? AppShelfPalette.accent
-                        : Color.secondary.opacity(0.7)
+                    isTarget ? AppShelfPalette.accent : Color.secondary.opacity(0.7)
                 )
+        }
+
+        private var isTarget: Bool {
+            activity.isActive && groupID == highlight.sectionTargetID
         }
     }
 
@@ -728,6 +755,9 @@ struct ContentView: View {
     /// outline of the block under the cursor.
     private struct SectionDropHighlight: View {
         @ObservedObject private var highlight = DragHighlight.shared
+        /// Driven by "a drag is happening" rather than by which block is hovered: that
+        /// flips constantly and made every block's outline blink while the pointer moved.
+        @ObservedObject private var activity = DragActivity.shared
         let groupID: UUID?
 
         var body: some View {
@@ -742,17 +772,20 @@ struct ContentView: View {
         }
 
         private var isTarget: Bool {
-            groupID != nil && highlight.sectionTargetID == groupID
+            // Gated on the drag still running: the marker is only cleared when a drag
+            // ends, so without this a drag released on empty space would leave one block
+            // accented indefinitely.
+            activity.isActive && groupID != nil && highlight.sectionTargetID == groupID
         }
 
         private var fill: Color {
             if isTarget { return AppShelfPalette.accent.opacity(0.13) }
-            return highlight.isReordering ? Color.primary.opacity(0.05) : Color.clear
+            return activity.isActive ? Color.primary.opacity(0.05) : Color.clear
         }
 
         private var stroke: Color {
             if isTarget { return AppShelfPalette.accent }
-            return highlight.isReordering ? AppShelfPalette.accent.opacity(0.35) : Color.clear
+            return activity.isActive ? AppShelfPalette.accent.opacity(0.35) : Color.clear
         }
     }
 
@@ -868,6 +901,9 @@ struct ContentView: View {
                     return true
                 } isTargeted: { isTargeted in
                     highlight.setHover(isTargeted)
+                    // A tile is inside the block too: without this, the outline of the
+                    // section blinked off every time the pointer crossed a tile.
+                    highlight.setGroupHover(isTargeted ? sectionGroupID : nil)
                     guard isTargeted else { return }
                     // The drag always begins under the tile being dragged, so the first
                     // tile to report itself is the one the user picked up. Remembering it
@@ -893,16 +929,21 @@ struct ContentView: View {
         guard let from = list.firstIndex(where: { $0.path == sourcePath }) else { return }
 
         guard let to = list.firstIndex(where: { $0.path == target.path }), to != from else { return }
-        // Already sitting directly in front of the hovered tile: the order would not
-        // change, and re-running it would fight the shuffle.
-        if to - from == 1 { return }
         // The same pair never runs twice in a row; the tile under the cursor reports
         // itself repeatedly while the pointer rests.
         if highlight.lastReflowTarget == target.path { return }
 
         highlight.lastReflowTarget = target.path
-        withAnimation(.easeOut(duration: 0.22)) {
-            store.moveApps([sourcePath], before: target, in: groupID, persist: false)
+        // Dragging right lands the app *behind* the tile it passes: inserting in front
+        // of that tile is a no-op once they are neighbours, and that no-op was what made
+        // the gesture feel like it needed a whole extra tile of travel. Dragging left
+        // still inserts in front, so one tile of travel always swaps a pair.
+        withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.82)) {
+            if to > from {
+                store.moveApps([sourcePath], after: target, in: groupID, persist: false)
+            } else {
+                store.moveApps([sourcePath], before: target, in: groupID, persist: false)
+            }
         }
     }
 

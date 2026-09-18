@@ -118,6 +118,8 @@
   "apps_count": "{count} 个应用 · {running} 个正在运行",
   "updated_at": "更新于 {time}",
   "language": "语言",
+  "refresh.title": "重新扫描全部应用？",
+  "refresh.message": "会重新扫描 /Applications、系统应用与 ~/Applications 中的应用，并重新读取运行状态。应用较多时可能需要几秒到几十秒，期间 CPU 和磁盘占用会升高。",
   "language.system": "跟随系统",
   "appearance": "外观",
   "appearance.system": "跟随系统",
