@@ -12,13 +12,26 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: Build and test (macOS 14)
-    runs-on: macos-14
+    name: Build and test
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+      # swift-testing needs a Swift 6 toolchain. Prefer an installed Xcode 16+ on the
+      # runner image and fall back to whatever the image defaults to, so the workflow
+      # does not rot when GitHub bumps the image's Xcode.
+      - name: Select a Swift 6 toolchain
+        run: |
+          set -euo pipefail
+          candidate="$(ls -d /Applications/Xcode_1[6-9]*.app 2>/dev/null | sort | tail -1 || true)"
+          if [ -n "$candidate" ]; then
+            sudo xcode-select -s "$candidate/Contents/Developer"
+          fi
+          swift --version
+          swift --version | grep -q "Swift version 6\." || {
+            echo "A Swift 6 toolchain is required." >&2
+            exit 1
+          }
 
       # The project's own contribution gate is a warning-free build, so CI enforces it
       # rather than relying on whoever remembers the flag.
