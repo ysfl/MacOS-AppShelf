@@ -54,30 +54,20 @@ rm -f "$OUT"/*.png(N)
 echo "==> building"
 "$SCRIPT_DIR/build-app.sh" debug
 
-# The matrix overwrites these two keys, so record exactly what they held beforehand and put
-# it back on exit. A key that was absent has to be deleted again, not written as empty.
+# The matrix overwrites these two keys, so record what each held beforehand and put it back
+# on exit. An empty prior value means the key was absent, so it has to be deleted again
+# rather than written as an empty string. (`status` is read-only in zsh, hence `rc`.)
 DRIVEN_KEYS=(AppShelf.appearance AppShelf.language)
-typeset -a PRESENT
-for key in "${DRIVEN_KEYS[@]}"; do
-  if [ -n "$(defaults read "$DOMAIN" "$key" 2>/dev/null || true)" ]; then
-    PRESENT+=("yes")
-  else
-    PRESENT+=("no")
-  fi
-done
 typeset -a PRIOR_VALUE
 for key in "${DRIVEN_KEYS[@]}"; do
   PRIOR_VALUE+=("$(defaults read "$DOMAIN" "$key" 2>/dev/null || true)")
 done
 
 restore() {
-  # `status` is a read-only special parameter in zsh, so the exit code goes elsewhere.
-  local rc=$?
-  local i=1
-  local key
+  local rc=$? i=1 key
   osascript -e "tell application \"应用架\" to quit" 2>/dev/null || true
   for key in "${DRIVEN_KEYS[@]}"; do
-    if [ "${PRESENT[$i]}" = "yes" ]; then
+    if [ -n "${PRIOR_VALUE[$i]}" ]; then
       defaults write "$DOMAIN" "$key" -string "${PRIOR_VALUE[$i]}"
     else
       defaults delete "$DOMAIN" "$key" 2>/dev/null || true
@@ -85,8 +75,7 @@ restore() {
     i=$((i + 1))
   done
   rm -rf "$TOOL_DIR"
-  echo "==> screenshots in $OUT"
-  if [ "$rc" -eq 0 ]; then echo "==> prior preferences restored"; fi
+  echo "==> screenshots in $OUT, prior preferences restored"
   return "$rc"
 }
 trap restore EXIT
