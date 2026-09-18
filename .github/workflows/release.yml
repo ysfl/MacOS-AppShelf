@@ -36,6 +36,11 @@ jobs:
       - name: Test before packaging
         run: swift test
 
+      # A release is the point of no return for a public repo, so the content red lines
+      # are re-checked against the exact commit being shipped.
+      - name: Publication and quality gates
+        run: python3 Scripts/gates/gates.py all --quiet
+
       # VERSION is the tag, and build-release.sh refuses if CHANGELOG.md documents a
       # different latest version. That guard exists because a 1.2.0 DMG once shipped a
       # bundle whose Info.plist still said 1.1.0.

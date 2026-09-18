@@ -4,7 +4,20 @@
 
 AppShelf is a native macOS app launcher. It reads `.app` bundles from common application folders, organizes them into groups, and opens them from a searchable grid. It features a Launchpad-style tile layout, drag-to-group, disk and memory usage, pinyin search, a global search panel, and a Chinese / English interface.
 
-当前版本 / Current version: `1.3.1`
+当前版本 / Current version: `1.4.0`
+
+## 1.4.0 的新变化 / What's new in 1.4.0
+
+- 卡片密度偏好：紧凑、标准、宽松三档，图标大小与每行数量随窗口一起调整。
+  Tile density: compact, standard, or roomy; icon size and columns follow.
+- 可登录时自动启动，注册被拒时会说明原因。
+  Launch at sign-in, and a refused registration says so instead of silently reverting.
+- 启动更多的应用在同分结果里排前面，浮层空白时列出最近用的。
+  Usage now orders tied results, and the panel's empty query shows what you use.
+- 项目门禁：文件规模、禁桩检查、提交信息、公开内容红线、翻译表完整性、字号棘轮、坑位台账。
+  Project gates: file size, no placeholder code, commit messages, public-content red lines, translation-table completeness, a type-size ratchet, and a traps ledger.
+- 切到 Swift 6 严格并发，全新构建零诊断。
+  Swift 6 strict concurrency, with a clean-from-scratch build reporting no diagnostics.
 
 ## 1.3.1 的新变化 / What's new in 1.3.1
 
@@ -131,19 +144,19 @@ The same path is shown in the Settings panel. External files override the bundle
 
 ## 安装 / Install
 
-1. 下载 [AppShelf-1.3.1.dmg](https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.3.1/AppShelf-1.3.1.dmg)，然后打开 DMG。
-   Download [AppShelf-1.3.1.dmg](https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.3.1/AppShelf-1.3.1.dmg) and open the DMG.
+1. 下载 [AppShelf-1.4.0.dmg](https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.4.0/AppShelf-1.4.0.dmg)，然后打开 DMG。
+   Download [AppShelf-1.4.0.dmg](https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.4.0/AppShelf-1.4.0.dmg) and open the DMG.
 2. 把“应用架”拖到“应用程序”文件夹。
    Drag “应用架” to the Applications folder.
 3. 首次打开使用 Finder 右键菜单中的“打开”。发布包使用 ad-hoc 签名，未经过 Apple notarization；应用架不会请求额外系统权限。
    On first launch, use Finder's “Open” command if macOS shows a security prompt. The release is ad-hoc signed and is not notarized by Apple; AppShelf does not request extra system privileges.
 
-发布包的校验和作为同名 Release 附件提供：[SHA256SUMS](https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.3.1/SHA256SUMS)。下载后执行下面两条即可验证：
+发布包的校验和作为同名 Release 附件提供：[SHA256SUMS](https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.4.0/SHA256SUMS)。下载后执行下面两条即可验证：
 
 The checksum ships as a release asset. Verify a download with:
 
 ```bash
-curl -LO https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.3.1/SHA256SUMS
+curl -LO https://github.com/ysfl/MacOS-AppShelf/releases/download/v1.4.0/SHA256SUMS
 shasum -a 256 -c SHA256SUMS
 ```
 
@@ -159,8 +172,8 @@ Installers are not committed; the tag workflow builds them and attaches them to 
 - A Swift 6.0 toolchain. Xcode 16 or newer is suitable, as are Xcode Command Line Tools that provide a matching Swift toolchain.
 - 构建脚本会使用 macOS 自带的 `swift`、`sips`、`iconutil`、`codesign` 和 `hdiutil`。
 - The build scripts use the macOS-provided `swift`, `sips`, `iconutil`, `codesign`, and `hdiutil` tools.
-- `1.3.1` 安装包在 Apple Silicon macOS 上构建和验证，当前不是 universal binary。Intel Mac 可以尝试从源码构建，但不在此发布包的验证范围内。
-- The `1.3.1` package was built and verified on Apple Silicon macOS and is not a universal binary. Intel Macs may build from source, but are outside the verification scope of this package.
+- `1.4.0` 安装包在 Apple Silicon macOS 上构建和验证，当前不是 universal binary。Intel Mac 可以尝试从源码构建，但不在此发布包的验证范围内。
+- The `1.4.0` package was built and verified on Apple Silicon macOS and is not a universal binary. Intel Macs may build from source, but are outside the verification scope of this package.
 
 本次发布的构建验证环境：macOS 26.5.2 (arm64)、Xcode 26.2、Swift 6.2.3。它们是验证记录，不是应用的最低运行要求。
 
@@ -180,20 +193,22 @@ swift --version
 Run these commands from the repository root:
 
 ```bash
+./Scripts/gates/install-hooks.sh
 swift build -c debug -Xswiftc -warnings-as-errors
 swift test
+python3 Scripts/gates/gates.py all
 ./Scripts/build-app.sh
 open dist/AppShelf.app
 ```
 
-生成 `1.3.1` 安装包（版本号会写入包内 `Info.plist`，与 `CHANGELOG.md` 不一致时直接拒绝打包）：
+生成 `1.4.0` 安装包（版本号会写入包内 `Info.plist`，与 `CHANGELOG.md` 不一致时直接拒绝打包）：
 
-Build the `1.3.1` installer. The version is written into the bundle's `Info.plist`, and the script refuses when it disagrees with `CHANGELOG.md`:
+Build the `1.4.0` installer. The version is written into the bundle's `Info.plist`, and the script refuses when it disagrees with `CHANGELOG.md`:
 
 ```bash
-./Scripts/build-release.sh 1.3.1
+./Scripts/build-release.sh 1.4.0
 (cd release && shasum -a 256 -c SHA256SUMS)
-hdiutil verify release/AppShelf-1.3.1.dmg
+hdiutil verify release/AppShelf-1.4.0.dmg
 ```
 
 ## 持续集成与发布 / CI and Release
@@ -217,9 +232,9 @@ To ship a release:
 ```bash
 # 1. 先把版本号和更新记录写进 CHANGELOG.md 与 README.md
 # 2. 本地验证
-swift test && ./Scripts/build-release.sh 1.3.1
+swift test && ./Scripts/build-release.sh 1.4.0
 # 3. 提交、打标签、推送
-git tag -a v1.3.1 -m "AppShelf 1.3.1" && git push origin main v1.3.1
+git tag -a v1.4.0 -m "AppShelf 1.4.0" && git push origin main v1.4.0
 ```
 
 标签推送后由 CI 出包，不必在本地上传安装包。

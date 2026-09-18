@@ -20,6 +20,11 @@ jobs:
       # swift-testing needs a Swift 6 toolchain. Prefer an installed Xcode 16+ on the
       # runner image and fall back to whatever the image defaults to, so the workflow
       # does not rot when GitHub bumps the image's Xcode.
+      # Hooks are bypassable locally, so the same sweep runs here. `publication` is the
+      # one that must never be skippable: a leak in a public repo cannot be recalled.
+      - name: Project gates
+        run: python3 Scripts/gates/gates.py all --quiet
+
       - name: Select a Swift 6 toolchain
         run: |
           set -euo pipefail
